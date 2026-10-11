@@ -6,63 +6,103 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'App Version Name (e.g. 1.0.0)'
+        required: false
+        default: '1.0.0'
+      version_code:
+        description: 'App Version Code (e.g. 1)'
+        required: false
+        default: '1'
+
+env:
+  VERSION_NAME: ${{ github.event.inputs.version_name || '1.0.0' }}
+  VERSION_CODE: ${{ github.event.inputs.version_code || github.run_number }}
 
 jobs:
   build:
-    name: Build & Test Android APK
+    name: Build Live Screen AI Guide APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      # AGP 9.1.1 strictly requires Java 21
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
-      - name: Prepare Keystore & Environment Secrets
+      - name: Make Gradlew Executable
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          fi
+
+      - name: Prepare Keystore & Environment
         run: |
           # 1. Restore debug.keystore from base64 if present
           if [ -f debug.keystore.base64 ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
-            echo "debug.keystore restored successfully."
+            (base64 --decode debug.keystore.base64 > debug.keystore || base64 -d debug.keystore.base64 > debug.keystore) 2>/dev/null || true
           fi
 
-          # 2. Configure .env for Secrets Gradle Plugin
+          # Fallback: if debug.keystore is still missing, generate standard debug keystore
+          if [ ! -f debug.keystore ]; then
+            echo "Generating new debug.keystore..."
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          # 2. Setup .env file for Secrets Gradle Plugin
           if [ -n "${{ secrets.GEMINI_API_KEY }}" ]; then
             echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" > .env
-            echo ".env populated with GitHub Secret GEMINI_API_KEY."
+            echo "GEMINI_API_KEY injected from GitHub Secrets."
           elif [ -f .env.example ]; then
             cp .env.example .env
-            echo ".env copied from .env.example."
+            echo ".env initialized from .env.example."
           else
             echo "GEMINI_API_KEY=MY_GEMINI_API_KEY" > .env
           fi
 
-      - name: Run Unit Tests
-        run: gradle :app:testDebugUnitTest --no-daemon
+      - name: Run Unit & Robolectric Tests
+        run: |
+          ./gradlew :app:testDebugUnitTest --no-daemon
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon
+        run: |
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Upload Debug APK Artifact
+      - name: Prepare Named APK
+        run: |
+          mkdir -p build-artifacts
+          cp app/build/outputs/apk/debug/*.apk build-artifacts/LiveScreenAIGuide-v${{ env.VERSION_NAME }}.apk
+          ls -la build-artifacts/
+
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LiveScreenAIGuide-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          name: LiveScreenAIGuide-v${{ env.VERSION_NAME }}
+          path: build-artifacts/*.apk
           retention-days: 30
 
       - name: Upload Test Reports (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-reports
+          name: test-reports
           path: app/build/reports/tests/
           retention-days: 7
