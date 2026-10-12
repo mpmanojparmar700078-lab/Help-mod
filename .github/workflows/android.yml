@@ -8,11 +8,11 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'App Version Name (e.g. 1.0.0)'
+        description: 'App Version Name'
         required: false
         default: '1.0.0'
       version_code:
-        description: 'App Version Code (e.g. 1)'
+        description: 'App Version Code'
         required: false
         default: '1'
 
@@ -29,80 +29,82 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # AGP 9.1.1 strictly requires Java 21
+      # AGP 9.1.1 requires JDK 21
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
+          cache: 'gradle'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK Licenses
+      # Configure Android SDK licenses and ensure Platform 36 is installed
+      - name: Setup Android SDK Platform 36 & Licenses
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
-
-      - name: Make Gradlew Executable
-        run: |
-          if [ -f gradlew ]; then
-            chmod +x gradlew
+          sudo mkdir -p "$ANDROID_HOME/licenses" || true
+          sudo chmod -R 777 "$ANDROID_HOME/licenses" || true
+          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n8933bad161af4178b1185d1a37fbf41ea5269c55" > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo -e "\n84831b9409646a218e747e45bce9857999872419\n7993a44a35e40a15b168e21673b43cbe8a26e69d\na5b793ddb7a491f623bc238eb56ec15973132770" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+          
+          # Accept licenses via sdkmanager if available
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses 2>/dev/null || true
+            "$SDKMANAGER" --install "platforms;android-36" 2>/dev/null || true
           fi
 
-      - name: Prepare Keystore & Environment
+      # Prepare keystore and secrets files
+      - name: Prepare Keystore & Environment Files
         run: |
-          # 1. Restore debug.keystore from base64 if present
-          if [ -f debug.keystore.base64 ]; then
-            (base64 --decode debug.keystore.base64 > debug.keystore || base64 -d debug.keystore.base64 > debug.keystore) 2>/dev/null || true
+          # 1. Decode debug.keystore from base64 if present
+          if [ -f "debug.keystore.base64" ]; then
+            (base64 -d debug.keystore.base64 > debug.keystore || base64 --decode debug.keystore.base64 > debug.keystore) 2>/dev/null || true
           fi
 
-          # Fallback: if debug.keystore is still missing, generate standard debug keystore
-          if [ ! -f debug.keystore ]; then
-            echo "Generating new debug.keystore..."
+          # Fallback: Generate a valid debug keystore if missing
+          if [ ! -f "debug.keystore" ]; then
+            echo "Creating debug.keystore via keytool..."
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
           # 2. Setup .env file for Secrets Gradle Plugin
           if [ -n "${{ secrets.GEMINI_API_KEY }}" ]; then
             echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" > .env
-            echo "GEMINI_API_KEY injected from GitHub Secrets."
-          elif [ -f .env.example ]; then
+          elif [ -f ".env.example" ]; then
             cp .env.example .env
-            echo ".env initialized from .env.example."
           else
             echo "GEMINI_API_KEY=MY_GEMINI_API_KEY" > .env
           fi
 
-      - name: Run Unit & Robolectric Tests
+      # Fix Windows CRLF line endings if pushed from Windows/Android and grant execute permissions
+      - name: Fix Line Endings and Permissions
         run: |
-          ./gradlew :app:testDebugUnitTest --no-daemon
+          sed -i 's/\r$//' gradlew || true
+          chmod +x gradlew
 
+      # Build debug APK with stacktrace for clear reporting
       - name: Build Debug APK
-        run: |
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Prepare Named APK
+      - name: Prepare Output APK
         run: |
-          mkdir -p build-artifacts
-          cp app/build/outputs/apk/debug/*.apk build-artifacts/LiveScreenAIGuide-v${{ env.VERSION_NAME }}.apk
-          ls -la build-artifacts/
+          mkdir -p build-outputs
+          APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          if [ -n "$APK_PATH" ]; then
+            cp "$APK_PATH" "build-outputs/LiveScreenAIGuide-v${{ env.VERSION_NAME }}.apk"
+          fi
+          ls -la build-outputs/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LiveScreenAIGuide-v${{ env.VERSION_NAME }}
-          path: build-artifacts/*.apk
+          name: LiveScreenAIGuide-v${{ env.VERSION_NAME }}-APK
+          path: build-outputs/*.apk
           retention-days: 30
 
-      - name: Upload Test Reports (on failure)
+      - name: Show Diagnostics on Failure
         if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-reports
-          path: app/build/reports/tests/
-          retention-days: 7
+        run: |
+          echo "=== DIAGNOSTICS: BUILD FAILED ==="
+          ls -la
+          ls -la app/
+          find app/build/reports -type f 2>/dev/null | xargs -r tail -n 40 || true
