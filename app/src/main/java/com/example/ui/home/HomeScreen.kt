@@ -41,6 +41,14 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import com.example.service.FloatingAssistantService
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -124,6 +132,9 @@ fun HomeScreen(
         }
     }
 
+    val isFloatingRunning by FloatingAssistantService.isRunning.collectAsState()
+    var showOverlayPermissionDialog by remember { mutableStateOf(false) }
+
     fun handleStartSession() {
         if (!hasMicPermission) {
             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -131,6 +142,59 @@ fun HomeScreen(
         }
         val captureIntent = mediaProjectionManager.createScreenCaptureIntent()
         screenCaptureLauncher.launch(captureIntent)
+    }
+
+    fun handleEnableFloatingAssistant() {
+        if (!Settings.canDrawOverlays(context)) {
+            showOverlayPermissionDialog = true
+            return
+        }
+        if (!hasMicPermission) {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        FloatingAssistantService.startService(context)
+    }
+
+    fun handleDisableFloatingAssistant() {
+        FloatingAssistantService.stopService(context)
+    }
+
+    if (showOverlayPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showOverlayPermissionDialog = false },
+            title = {
+                Text(
+                    text = "डिस्प्ले ओवरले अनुमति आवश्यक है",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "फ़्लोटिंग सहायक को आपके स्क्रीन पर अन्य ऐप्स के ऊपर प्रदर्शित होने (Display over other apps) की अनुमति की आवश्यकता है।\n\nइससे आप YouTube, Chrome, Settings या किसी भी अन्य ऐप को इस्तेमाल करते समय स्क्रीन पर बिना मुख्य ऐप खोले सीधे एआई से सवाल पूछ सकेंगे।"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showOverlayPermissionDialog = false
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.testTag("grant_overlay_permission_button")
+                ) {
+                    Text("सेटिंग्स खोलें और अनुमति दें")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverlayPermissionDialog = false }) {
+                    Text("रद्द करें")
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -314,6 +378,137 @@ fun HomeScreen(
                                 Text(
                                     text = if (isCapturing) "वर्तमान सत्र खोलें" else "लाइव सत्र शुरू करें",
                                     fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Floating Assistant Card (Requirement 11.A)
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("floating_assistant_card"),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isFloatingRunning) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = if (isFloatingRunning) Color(0x3310B981) else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                    modifier = Modifier.size(38.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Layers,
+                                            contentDescription = null,
+                                            tint = if (isFloatingRunning) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                Column {
+                                    Text(
+                                        text = "फ़्लोटिंग सहायक (Gemini Overlay)",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp
+                                    )
+                                    Text(
+                                        text = if (isFloatingRunning) "सक्रिय है • स्क्रीन पर बबल मौजूद है" else "अन्य ऐप्स पर स्क्रीन गाइड पाएं",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            if (isFloatingRunning) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0x3310B981)
+                                ) {
+                                    Text(
+                                        text = "चालू",
+                                        color = Color(0xFF10B981),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Text(
+                            text = "फ़्लोटिंग बबल को स्क्रीन पर कहीं भी ले जाएं। YouTube, Chrome या सेटिंग्स खोलकर सीधे स्क्रीन देखकर हिन्दी में सवाल पूछें।",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 17.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        if (isFloatingRunning) {
+                            Button(
+                                onClick = { handleDisableFloatingAssistant() },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("disable_floating_assistant_button"),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("फ़्लोटिंग सहायक बंद करें", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            Button(
+                                onClick = { handleEnableFloatingAssistant() },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("enable_floating_assistant_button"),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Layers,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Enable Floating Assistant",
+                                    fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             }

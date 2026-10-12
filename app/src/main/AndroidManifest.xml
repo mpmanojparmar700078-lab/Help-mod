@@ -40,6 +40,17 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <service
+            android:name=".service.FloatingAssistantService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <activity
+            android:name=".service.ScreenCapturePromptActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
     </application>
 
 </manifest>
