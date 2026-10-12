@@ -271,6 +271,7 @@ fun LiveSessionScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
@@ -438,23 +439,57 @@ fun LiveSessionScreen(
                                 )
                             }
                         } else {
-                            // Quick Action: Ask About Screen Now
-                            FloatingActionButton(
-                                onClick = {
-                                    processQuery("मेरी स्क्रीन पर क्या दिखाई दे रहा है और मुझे क्या करना चाहिए?")
-                                },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .testTag("quick_ask_screen_button"),
-                                shape = CircleShape,
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = MaterialTheme.colorScheme.primary
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ScreenShare,
-                                    contentDescription = "Ask Current Screen",
-                                    modifier = Modifier.size(22.dp)
-                                )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                // Push-to-Talk voice trigger
+                                IconButton(
+                                    onClick = {
+                                        if (isListening) {
+                                            app.audioInputManager.stopListening()
+                                        } else {
+                                            if (assistantState == AssistantState.SPEAKING) {
+                                                app.audioOutputManager.stop()
+                                            }
+                                            app.audioInputManager.startListening(
+                                                language = settings.preferredLanguage,
+                                                continuous = false
+                                            ) { speechResult ->
+                                                if (speechResult.isNotBlank() && assistantState != AssistantState.THINKING) {
+                                                    processQuery(speechResult)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isListening) com.example.ui.theme.ListeningGreen else MaterialTheme.colorScheme.secondaryContainer)
+                                        .testTag("push_to_talk_button")
+                                ) {
+                                    Icon(
+                                        imageVector = if (isListening) Icons.Default.Stop else Icons.Default.Mic,
+                                        contentDescription = "Push to Talk",
+                                        tint = if (isListening) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+
+                                // Quick Action: Ask About Screen Now
+                                FloatingActionButton(
+                                    onClick = {
+                                        processQuery("मेरी स्क्रीन पर क्या दिखाई दे रहा है और मुझे क्या करना चाहिए?")
+                                    },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("quick_ask_screen_button"),
+                                    shape = CircleShape,
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.primary
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ScreenShare,
+                                        contentDescription = "Ask Current Screen",
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
                             }
                         }
                     }

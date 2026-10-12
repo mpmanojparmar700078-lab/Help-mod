@@ -1,7 +1,6 @@
 package com.example.ui.floating
 
 import android.graphics.Bitmap
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -11,7 +10,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,20 +25,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,6 +63,7 @@ import com.example.ui.components.StateIndicatorBadge
 import com.example.ui.theme.ListeningGreen
 import com.example.ui.theme.SpeakingPurple
 import com.example.ui.theme.ThinkingAmber
+import com.example.voice.VoiceInputState
 
 @Composable
 fun FloatingBubbleContent(
@@ -95,7 +91,7 @@ fun FloatingBubbleContent(
 
     Box(
         modifier = modifier
-            .size(60.dp)
+            .size(62.dp)
             .scale(if (assistantState != AssistantState.IDLE) pulseScale else 1.0f),
         contentAlignment = Alignment.Center
     ) {
@@ -143,6 +139,7 @@ fun FloatingBubbleContent(
                         .border(1.5.dp, Color(0xFF0F172A), CircleShape)
                 )
 
+                // Screen Capture active green dot
                 if (isCapturing) {
                     Box(
                         modifier = Modifier
@@ -162,6 +159,7 @@ fun FloatingBubbleContent(
 @Composable
 fun FloatingPanelContent(
     assistantState: AssistantState,
+    voiceState: VoiceInputState,
     isCapturing: Boolean,
     isMicMuted: Boolean,
     latestFrame: Bitmap?,
@@ -171,6 +169,8 @@ fun FloatingPanelContent(
     errorMessage: String?,
     onToggleScreenShare: () -> Unit,
     onToggleMic: () -> Unit,
+    onPushToTalk: () -> Unit,
+    onStopListening: () -> Unit,
     onAskScreenNow: () -> Unit,
     onInterruptSpeech: () -> Unit,
     onMinimize: () -> Unit,
@@ -192,7 +192,7 @@ fun FloatingPanelContent(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Header Bar
+            // Header Bar with branding, minimize and close
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -352,7 +352,7 @@ fun FloatingPanelContent(
                 }
             }
 
-            // Live Caption / Transcript Display
+            // Live Caption / Transcript & AI Response Display
             if (lastTranscript.isNotBlank() || lastResponse.isNotBlank()) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
@@ -387,7 +387,7 @@ fun FloatingPanelContent(
                                 color = Color.White,
                                 fontSize = 12.sp,
                                 lineHeight = 16.sp,
-                                maxLines = 3,
+                                maxLines = 4,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
@@ -395,7 +395,7 @@ fun FloatingPanelContent(
                 }
             }
 
-            // Quick Ask Button (One-tap screen inquiry)
+            // 1-Tap Screen Inquiry Button
             Button(
                 onClick = onAskScreenNow,
                 modifier = Modifier
@@ -420,7 +420,39 @@ fun FloatingPanelContent(
                 )
             }
 
-            // Control Buttons Row (Screen Share + Mic Controls)
+            // Push-to-Talk Voice Button (Reliable speech input)
+            val isCurrentlyListening = assistantState == AssistantState.LISTENING || voiceState == VoiceInputState.LISTENING
+            Button(
+                onClick = {
+                    if (isCurrentlyListening) {
+                        onStopListening()
+                    } else {
+                        onPushToTalk()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isCurrentlyListening) ListeningGreen else Color(0xFF334155),
+                    contentColor = Color.White
+                )
+            ) {
+                Icon(
+                    imageVector = if (isCurrentlyListening) Icons.Default.Stop else Icons.Default.Mic,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (isCurrentlyListening) "सुन रहे हैं... (टैप करके रोकें)" else "बोलने के लिए टैप करें (Push to Talk)",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            // Secondary Controls: Screen Share Toggle + Mic Mute
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -430,7 +462,7 @@ fun FloatingPanelContent(
                     onClick = onToggleScreenShare,
                     modifier = Modifier
                         .weight(1f)
-                        .height(40.dp),
+                        .height(38.dp),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = if (isCapturing) Color(0x3310B981) else Color(0xFF334155),
@@ -444,32 +476,32 @@ fun FloatingPanelContent(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (isCapturing) "स्क्रीन चालू" else "स्क्रीन रोकें",
+                        text = if (isCapturing) "स्क्रीन चालू" else "स्क्रीन शेयर करें",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
 
-                // Microphone Toggle
+                // Mic Mute Toggle
                 FilledTonalButton(
                     onClick = onToggleMic,
                     modifier = Modifier
                         .weight(1f)
-                        .height(40.dp),
+                        .height(38.dp),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = if (!isMicMuted) Color(0x334F46E5) else Color(0x33EF4444),
-                        contentColor = if (!isMicMuted) Color(0xFF818CF8) else Color(0xFFF87171)
+                        containerColor = if (isMicMuted) Color(0x33EF4444) else Color(0xFF334155),
+                        contentColor = if (isMicMuted) Color(0xFFFCA5A5) else Color(0xFFCBD5E1)
                     )
                 ) {
                     Icon(
-                        imageVector = if (!isMicMuted) Icons.Default.Mic else Icons.Default.MicOff,
+                        imageVector = if (isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (!isMicMuted) "माइक चालू" else "माइक म्यूट",
+                        text = if (isMicMuted) "माइक म्यूट" else "माइक चालू",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold
                     )

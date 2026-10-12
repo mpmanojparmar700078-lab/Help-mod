@@ -11,22 +11,29 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Handler
-import android.os.Looper
+import android.os.HandlerThread
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.WindowManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlin.math.abs
 
 class ScreenCaptureManager(private val context: Context) {
+    companion object {
+        private const val TAG = "ScreenCaptureManager"
+    }
+
     private val mediaProjectionManager =
         context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-    private val backgroundHandler = Handler(Looper.getMainLooper())
+
+    // Background thread for non-blocking image acquisition
+    private var handlerThread: HandlerThread? = null
+    private var backgroundHandler: Handler? = null
 
     private val _isCapturing = MutableStateFlow(false)
     val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
@@ -37,9 +44,7 @@ class ScreenCaptureManager(private val context: Context) {
     private var screenWidth = 720
     private var screenHeight = 1280
     private var screenDensity = 320
-
-    private var lastSampleHash: Long = 0L
-    private var consecutiveStaticCount = 0
+    private val frameLock = Any()
 
     fun startCapture(resultCode: Int, data: Intent) {
         stopCapture()
@@ -50,7 +55,8 @@ class ScreenCaptureManager(private val context: Context) {
         windowManager.defaultDisplay.getRealMetrics(metrics)
 
         screenDensity = metrics.densityDpi
-        // Scale down resolution for efficiency & mobile network optimization
+
+        // Normalize max dimension to 1080 for quick encoding & high OCR clarity
         val maxDimension = 1080
         val scale = if (metrics.widthPixels > maxDimension || metrics.heightPixels > maxDimension) {
             maxDimension.toFloat() / maxOf(metrics.widthPixels, metrics.heightPixels)
@@ -60,22 +66,30 @@ class ScreenCaptureManager(private val context: Context) {
 
         screenWidth = (metrics.widthPixels * scale).toInt()
         screenHeight = (metrics.heightPixels * scale).toInt()
-        // Ensure even dimensions
         if (screenWidth % 2 != 0) screenWidth--
         if (screenHeight % 2 != 0) screenHeight--
 
+        Log.d(TAG, "Starting capture with dimensions: ${screenWidth}x${screenHeight}, density: $screenDensity")
+
         try {
+            val thread = HandlerThread("ScreenCaptureBackgroundThread").apply { start() }
+            handlerThread = thread
+            val handler = Handler(thread.looper)
+            backgroundHandler = handler
+
             mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
             if (mediaProjection == null) {
+                Log.e(TAG, "mediaProjection returned null")
                 _isCapturing.value = false
                 return
             }
 
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
+                    Log.i(TAG, "MediaProjection stopped by system")
                     stopCapture()
                 }
-            }, backgroundHandler)
+            }, handler)
 
             imageReader = ImageReader.newInstance(
                 screenWidth,
@@ -92,16 +106,17 @@ class ScreenCaptureManager(private val context: Context) {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 imageReader?.surface,
                 null,
-                backgroundHandler
+                handler
             )
 
             imageReader?.setOnImageAvailableListener({ reader ->
                 processAvailableImage(reader)
-            }, backgroundHandler)
+            }, handler)
 
             _isCapturing.value = true
+            Log.i(TAG, "Screen capture started successfully")
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Error starting capture: ${e.message}", e)
             stopCapture()
         }
     }
@@ -111,7 +126,11 @@ class ScreenCaptureManager(private val context: Context) {
         try {
             image = reader.acquireLatestImage() ?: return
             val planes = image.planes
+            if (planes.isEmpty()) return
+
             val buffer = planes[0].buffer
+            buffer.rewind() // Ensure read position is 0
+
             val pixelStride = planes[0].pixelStride
             val rowStride = planes[0].rowStride
             val rowPadding = rowStride - pixelStride * screenWidth
@@ -131,40 +150,41 @@ class ScreenCaptureManager(private val context: Context) {
                 bitmap
             }
 
-            // Adaptive frame check: sample pixel hash to see if screen changed
-            val currentHash = computeSampleHash(cleanBitmap)
-            if (abs(currentHash - lastSampleHash) > 1000L) {
-                lastSampleHash = currentHash
-                consecutiveStaticCount = 0
+            synchronized(frameLock) {
+                val old = _latestFrame.value
                 _latestFrame.value = cleanBitmap
-            } else {
-                consecutiveStaticCount++
-                // Update frame reference periodically even if static
-                if (consecutiveStaticCount % 10 == 0 || _latestFrame.value == null) {
-                    _latestFrame.value = cleanBitmap
+                if (old != null && old != cleanBitmap && !old.isRecycled) {
+                    old.recycle()
                 }
             }
         } catch (e: Exception) {
-            // Transient image buffer acquisition errors
+            // Transient image buffer read errors (e.g. buffer closed)
         } finally {
-            image?.close()
-        }
-    }
-
-    private fun computeSampleHash(bitmap: Bitmap): Long {
-        var hash = 0L
-        val stepX = maxOf(1, bitmap.width / 16)
-        val stepY = maxOf(1, bitmap.height / 16)
-        for (y in 0 until bitmap.height step stepY) {
-            for (x in 0 until bitmap.width step stepX) {
-                hash = 31 * hash + bitmap.getPixel(x, y)
+            try {
+                image?.close()
+            } catch (e: Exception) {
+                // ignore
             }
         }
-        return hash
     }
 
+    /**
+     * Obtains an immutable, safe copy of the latest screen frame for AI analysis
+     */
     fun getLatestFrame(): Bitmap? {
-        return _latestFrame.value
+        synchronized(frameLock) {
+            val frame = _latestFrame.value
+            return if (frame != null && !frame.isRecycled) {
+                try {
+                    frame.copy(frame.config ?: Bitmap.Config.ARGB_8888, false)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to copy bitmap: ${e.message}")
+                    null
+                }
+            } else {
+                null
+            }
+        }
     }
 
     fun stopCapture() {
@@ -178,8 +198,20 @@ class ScreenCaptureManager(private val context: Context) {
 
             mediaProjection?.stop()
             mediaProjection = null
+
+            handlerThread?.quitSafely()
+            handlerThread = null
+            backgroundHandler = null
+
+            synchronized(frameLock) {
+                _latestFrame.value?.let {
+                    if (!it.isRecycled) it.recycle()
+                }
+                _latestFrame.value = null
+            }
+            Log.i(TAG, "Screen capture stopped and resources released")
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Error stopping capture: ${e.message}", e)
         }
     }
 }

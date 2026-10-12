@@ -2,6 +2,7 @@ package com.example.ai
 
 import android.graphics.Bitmap
 import android.util.Base64
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -19,10 +20,17 @@ sealed class GeminiResult {
 }
 
 class GeminiLiveClient {
+    companion object {
+        private const val TAG = "GeminiLiveClient"
+        // Compliant, supported multimodal vision models for Gemini API
+        const val PRIMARY_MODEL = "gemini-3.5-flash"
+        const val FALLBACK_MODEL = "gemini-flash-latest"
+    }
+
     private val client = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -35,11 +43,17 @@ class GeminiLiveClient {
         explanationDetail: String = "concise",
         language: String = "hi-IN"
     ): GeminiResult = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
+        val trimmedKey = apiKey.trim()
+        if (trimmedKey.isBlank() || trimmedKey == "MY_GEMINI_API_KEY") {
+            Log.w(TAG, "API Key is missing or default placeholder")
             return@withContext GeminiResult.Error(
-                "Gemini API Key उपलब्ध नहीं है। कृपया ऐप सेटिंग्स में अपनी API Key दर्ज करें या Secrets पैनल में GEMINI_API_KEY सेट करें।"
+                "Gemini API Key उपलब्ध नहीं है। कृपया ऐप सेटिंग्स (Settings) में अपनी Google AI Studio API Key दर्ज करें।",
+                "MISSING_KEY"
             )
         }
+
+        val hasValidFrame = screenBitmap != null && !screenBitmap.isRecycled
+        Log.d(TAG, "Starting screen analysis. Frame attached: $hasValidFrame, Question: '$userQuestion'")
 
         try {
             val root = JSONObject()
@@ -58,16 +72,16 @@ class GeminiLiveClient {
             }
 
             val systemPrompt = """
-                आप 'Live Screen AI Guide' (लाइव स्क्रीन एआई गाइड) हैं — उपयोगकर्ता के फ़ोन की स्क्रीन देखकर हिन्दी में तुरंत मार्गदर्शन देने वाले सहायक।
+                आप 'Live Screen AI Guide' (लाइव स्क्रीन एआई गाइड) हैं — उपयोगकर्ता के फ़ोन की स्क्रीन देखकर हिन्दी में तुरंत सटीक मार्गदर्शन देने वाले विशेषज्ञ सहायक।
                 
                 मुख्य निर्देश:
-                1. उपयोगकर्ता अपनी स्क्रीन साझा कर रहे हैं। स्क्रीन के दृश्य (टेक्स्ट, बटन, एरर, आइकन, सेटिंग्स) का बारीकी से विश्लेषण करें।
+                1. उपयोगकर्ता अपनी स्क्रीन साझा कर रहे हैं। स्क्रीन के दृश्य (दिखाई देने वाले टेक्स्ट, बटन, एरर डायलॉग, आइकन, सेटिंग्स, ऐप्स) का बारीकी से विश्लेषण करें।
                 2. $langInstruction
                 3. $detailInstruction
-                4. मार्गदर्शन केवल सूचनात्मक है: आप स्वयं स्क्रीन पर टैप, स्वाइप या कोई बदलाव नहीं कर सकते। उपयोगकर्ता को बताएं कि उन्हें क्या करना चाहिए (उदाहरण: 'नीचे 'कन्फर्म' बटन पर टैप करें', 'ऊपर दाएं कोने में गियर आइकन पर जाएं')।
-                5. स्क्रीन पर दिखाई देने वाले किसी भी पासवर्ड, कार्ड नंबर या निजी पिन को आवाज़ में न दोहराएं।
-                6. यदि स्क्रीन पर कोई स्पष्ट एरर है, तो एरर का कारण और समाधान सरल शब्दों में समझाएं।
-                7. यदि स्क्रीन अस्पष्ट है या कुछ नहीं दिख रहा है, तो ईमानदारी से बताएं।
+                4. मार्गदर्शन केवल सूचनात्मक है: आप स्वयं स्क्रीन पर टैप या स्वाइप नहीं कर सकते। उपयोगकर्ता को स्पष्ट रूप से बताएं कि उन्हें क्या करना चाहिए (उदाहरण: 'स्क्रीन के नीचे 'कन्फर्म' बटन पर टैप करें', 'ऊपर दाएं कोने में गियर आइकन पर जाएं')।
+                5. सुरक्षा नियम: स्क्रीन पर दिखाई देने वाले किसी भी पासवर्ड, क्रेडिट कार्ड नंबर या निजी पिन को कभी भी आवाज़ में न दोहराएं।
+                6. यदि स्क्रीन पर कोई एरर संदेश दिखाई दे रहा है, तो एरर का सही कारण और समाधान सरल शब्दों में बताएं।
+                7. यदि स्क्रीन छवि उपलब्ध नहीं है, तो उपयोगकर्ता को बताएं कि स्क्रीन शेयरिंग चालू करें।
             """.trimIndent()
 
             val systemInstructionObj = JSONObject().apply {
@@ -81,8 +95,8 @@ class GeminiLiveClient {
             // Contents array
             val contentsArray = JSONArray()
 
-            // Include last 3 conversation turns for context
-            val recentTurns = conversationHistory.takeLast(6)
+            // Include recent conversation turns for context
+            val recentTurns = conversationHistory.takeLast(4)
             for ((role, text) in recentTurns) {
                 val contentObj = JSONObject().apply {
                     put("role", if (role == "user") "user" else "model")
@@ -94,27 +108,34 @@ class GeminiLiveClient {
                 contentsArray.put(contentObj)
             }
 
-            // Current prompt with optional screen image
+            // Current turn with screen screenshot and user prompt
             val currentTurn = JSONObject().apply {
                 put("role", "user")
                 val parts = JSONArray()
 
-                // If we have a screen frame, attach it as inlineData
-                if (screenBitmap != null && !screenBitmap.isRecycled) {
-                    val base64Image = bitmapToBase64(screenBitmap)
+                // If screen frame is present, attach as inlineData JPEG
+                if (hasValidFrame) {
+                    val base64Image = bitmapToBase64(screenBitmap!!)
                     if (base64Image.isNotEmpty()) {
+                        Log.d(TAG, "Screen frame encoded to Base64 (length: ${base64Image.length} chars, dimensions: ${screenBitmap.width}x${screenBitmap.height})")
                         val inlineData = JSONObject().apply {
                             put("mimeType", "image/jpeg")
                             put("data", base64Image)
                         }
                         parts.put(JSONObject().apply { put("inlineData", inlineData) })
+                    } else {
+                        Log.w(TAG, "Failed to compress bitmap to base64")
                     }
+                } else {
+                    Log.d(TAG, "No screen frame available for this request")
                 }
 
                 val promptText = if (userQuestion.isNotBlank()) {
                     userQuestion
-                } else {
+                } else if (hasValidFrame) {
                     "मेरी स्क्रीन पर अभी क्या दिखाई दे रहा है और मुझे यहाँ क्या करना चाहिए?"
+                } else {
+                    "स्क्रीन शेयरिंग अभी बंद है। कृपया मुझे बताएं कि स्क्रीन शेयरिंग कैसे शुरू करें।"
                 }
                 parts.put(JSONObject().apply { put("text", promptText) })
 
@@ -131,30 +152,59 @@ class GeminiLiveClient {
             }
             root.put("generationConfig", genConfig)
 
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
-            val body = root.toString().toRequestBody(jsonMediaType)
+            // Try primary model (gemini-3.5-flash), fallback to gemini-flash-latest
+            var result = executeGenerateContent(PRIMARY_MODEL, trimmedKey, root)
+            if (result is GeminiResult.Error && (result.errorCode == "404" || result.errorCode == "400")) {
+                Log.w(TAG, "Primary model $PRIMARY_MODEL returned ${result.errorCode}, trying fallback to $FALLBACK_MODEL")
+                result = executeGenerateContent(FALLBACK_MODEL, trimmedKey, root)
+            }
 
-            val request = Request.Builder()
-                .url(url)
-                .post(body)
-                .header("Content-Type", "application/json")
-                .build()
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error in analyzeScreenAndRespond: ${e.message}", e)
+            GeminiResult.Error("नेटवर्क या कनेक्शन त्रुटि: ${e.localizedMessage ?: e.message}")
+        }
+    }
 
+    private fun executeGenerateContent(model: String, apiKey: String, requestPayload: JSONObject): GeminiResult {
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+        val body = requestPayload.toString().toRequestBody(jsonMediaType)
+
+        val request = Request.Builder()
+            .url(url)
+            .post(body)
+            .header("Content-Type", "application/json")
+            .build()
+
+        return try {
             client.newCall(request).execute().use { response ->
                 val responseBody = response.body?.string().orEmpty()
+                Log.d(TAG, "Response code: ${response.code} from model $model")
+
                 if (!response.isSuccessful) {
                     val errorObj = runCatching { JSONObject(responseBody).optJSONObject("error") }.getOrNull()
                     val errorMsg = errorObj?.optString("message") ?: "HTTP ${response.code}: $responseBody"
-                    return@withContext GeminiResult.Error(
-                        errorMessage = "Gemini API त्रुटि (${response.code}): $errorMsg",
-                        errorCode = response.code.toString()
-                    )
+                    val errorStatus = errorObj?.optString("status") ?: response.code.toString()
+
+                    Log.e(TAG, "API Error: HTTP ${response.code}, status: $errorStatus, message: $errorMsg")
+
+                    val friendlyMessage = when (response.code) {
+                        400 -> "अनुरोध अमान्य है: $errorMsg"
+                        401, 403 -> "API Key अमान्य या अनधिकृत है। कृपया ऐप सेटिंग्स में सही Gemini API Key दर्ज करें।"
+                        404 -> "मॉडल उपलब्ध नहीं है ($model)"
+                        429 -> "API अनुरोध सीमा (Quota Limit) समाप्त हो गई है। कृपया कुछ क्षण बाद पुनः प्रयास करें।"
+                        500, 503 -> "Google AI सर्वर वर्तमान में व्यस्त है। कृपया पुनः प्रयास करें।"
+                        else -> "Gemini API त्रुटि (${response.code}): $errorMsg"
+                    }
+
+                    return GeminiResult.Error(friendlyMessage, response.code.toString())
                 }
 
                 val jsonResponse = JSONObject(responseBody)
                 val candidates = jsonResponse.optJSONArray("candidates")
                 if (candidates == null || candidates.length() == 0) {
-                    return@withContext GeminiResult.Error("मॉडल से कोई उत्तर प्राप्त नहीं हुआ।")
+                    Log.w(TAG, "API returned no candidates in response")
+                    return GeminiResult.Error("मॉडल से कोई उत्तर प्राप्त नहीं हुआ।")
                 }
 
                 val firstCandidate = candidates.getJSONObject(0)
@@ -176,22 +226,25 @@ class GeminiLiveClient {
                 if (resultText.isEmpty()) {
                     GeminiResult.Error("स्क्रीन विश्लेषण में रिक्त उत्तर प्राप्त हुआ।")
                 } else {
+                    Log.d(TAG, "Successfully generated AI response (${resultText.length} chars)")
                     GeminiResult.Success(resultText)
                 }
             }
         } catch (e: Exception) {
-            GeminiResult.Error("नेटवर्क या कनेक्शन त्रुटि: ${e.localizedMessage ?: e.message}")
+            Log.e(TAG, "Network call failed: ${e.message}", e)
+            GeminiResult.Error("नेटवर्क कनेक्शन त्रुटि: कृपया इंटरनेट कनेक्शन की जांच करें (${e.message})")
         }
     }
 
     private fun bitmapToBase64(bitmap: Bitmap): String {
         return try {
             val outputStream = ByteArrayOutputStream()
-            // Compress as JPEG at 75% quality for quick upload & token efficiency
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 75, outputStream)
+            // Compress as JPEG at 80% quality for optimal balance of image detail & fast transfer
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
             val byteArray = outputStream.toByteArray()
             Base64.encodeToString(byteArray, Base64.NO_WRAP)
         } catch (e: Exception) {
+            Log.e(TAG, "Error encoding bitmap to base64: ${e.message}", e)
             ""
         }
     }

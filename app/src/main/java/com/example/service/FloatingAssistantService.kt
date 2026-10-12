@@ -13,14 +13,14 @@ import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.NotificationCompat
 import com.example.LiveScreenApp
@@ -31,6 +31,7 @@ import com.example.ui.components.AssistantState
 import com.example.ui.floating.FloatingBubbleContent
 import com.example.ui.floating.FloatingPanelContent
 import com.example.ui.theme.MyApplicationTheme
+import com.example.voice.VoiceInputState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,34 +43,8 @@ import java.util.UUID
 import kotlin.math.hypot
 
 class FloatingAssistantService : Service() {
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var windowManager: WindowManager? = null
-
-    private var bubbleView: ComposeView? = null
-    private var panelView: ComposeView? = null
-    private val lifecycleOwner = OverlayLifecycleOwner()
-
-    private lateinit var bubbleParams: WindowManager.LayoutParams
-    private lateinit var panelParams: WindowManager.LayoutParams
-
-    private val isPanelOpen = MutableStateFlow(false)
-    private val isMicMuted = MutableStateFlow(false)
-    private val assistantState = MutableStateFlow(AssistantState.IDLE)
-    private val lastTranscript = MutableStateFlow("")
-    private val lastResponse = MutableStateFlow("")
-    private val errorMessage = MutableStateFlow<String?>(null)
-
-    private var currentSessionId = UUID.randomUUID().toString()
-
-    private val captureBroadcastReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == ACTION_SCREEN_CAPTURE_GRANTED) {
-                // Screen capture started via ScreenCapturePromptActivity
-            }
-        }
-    }
-
     companion object {
+        private const val TAG = "FloatingAssistantService"
         const val CHANNEL_ID = "live_screen_floating_channel"
         const val NOTIFICATION_ID = 2002
         const val ACTION_START = "com.example.service.FLOATING_START"
@@ -98,6 +73,46 @@ class FloatingAssistantService : Service() {
         }
     }
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var windowManager: WindowManager? = null
+
+    private var bubbleView: ComposeView? = null
+    private var panelView: ComposeView? = null
+    private val lifecycleOwner = OverlayLifecycleOwner()
+
+    private lateinit var bubbleParams: WindowManager.LayoutParams
+    private lateinit var panelParams: WindowManager.LayoutParams
+
+    private val isPanelOpen = MutableStateFlow(false)
+    private val isMicMuted = MutableStateFlow(false)
+    private val assistantState = MutableStateFlow(AssistantState.IDLE)
+    private val lastTranscript = MutableStateFlow("")
+    private val lastResponse = MutableStateFlow("")
+    private val errorMessage = MutableStateFlow<String?>(null)
+
+    private var currentSessionId = UUID.randomUUID().toString()
+
+    private val captureBroadcastReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == ACTION_SCREEN_CAPTURE_GRANTED) {
+                Log.d(TAG, "Screen capture granted broadcast received")
+                // On Android 14+, now that user has granted consent, update FGS type to include mediaProjection
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val notification = buildNotification()
+                    try {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error promoting foreground service type: ${e.message}")
+                    }
+                }
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -123,17 +138,22 @@ class FloatingAssistantService : Service() {
             ACTION_START -> {
                 _isRunning.value = true
                 val notification = buildNotification()
+
+                // On Android 14+ (API 34+), start foreground initially with MICROPHONE type.
+                // Starting with MEDIA_PROJECTION before user consent throws SecurityException.
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                    )
+                    val app = LiveScreenApp.instance
+                    val fgsType = if (app.screenCaptureManager.isCapturing.value) {
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    } else {
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    }
+                    startForeground(NOTIFICATION_ID, notification, fgsType)
                 } else {
                     startForeground(NOTIFICATION_ID, notification)
                 }
+
                 initOverlayWindows()
-                startVoiceListening()
             }
         }
         return START_STICKY
@@ -160,7 +180,7 @@ class FloatingAssistantService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = screenWidth - 190
+            x = (screenWidth - 180).coerceAtLeast(20)
             y = 350
         }
 
@@ -179,11 +199,11 @@ class FloatingAssistantService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (screenWidth - 340 * displayMetrics.density.toInt()).coerceAtLeast(20)
+            x = 24
             y = 200
         }
 
-        // Create Bubble View
+        // Create Draggable Bubble View
         val bubble = ComposeView(this).apply {
             lifecycleOwner.attachToComposeView(this)
             setContent {
@@ -202,9 +222,13 @@ class FloatingAssistantService : Service() {
 
         setupBubbleTouchListener(bubble)
         bubbleView = bubble
-        windowManager?.addView(bubble, bubbleParams)
+        try {
+            windowManager?.addView(bubble, bubbleParams)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding bubble to WindowManager: ${e.message}", e)
+        }
 
-        // Create Panel View
+        // Create Floating Control Panel View
         val panel = ComposeView(this).apply {
             lifecycleOwner.attachToComposeView(this)
             setContent {
@@ -218,9 +242,11 @@ class FloatingAssistantService : Service() {
                     val transcript by lastTranscript.collectAsState()
                     val responseText by lastResponse.collectAsState()
                     val errorMsg by errorMessage.collectAsState()
+                    val voiceState by app.audioInputManager.voiceState.collectAsState()
 
                     FloatingPanelContent(
                         assistantState = state,
+                        voiceState = voiceState,
                         isCapturing = isCapturing,
                         isMicMuted = muted,
                         latestFrame = latestFrame,
@@ -230,6 +256,8 @@ class FloatingAssistantService : Service() {
                         errorMessage = errorMsg,
                         onToggleScreenShare = { toggleScreenSharing() },
                         onToggleMic = { toggleMicrophone() },
+                        onPushToTalk = { startPushToTalk() },
+                        onStopListening = { stopVoiceListening() },
                         onAskScreenNow = { askScreenQuestion("मेरी स्क्रीन पर अभी क्या दिख रहा है और मुझे क्या करना चाहिए?") },
                         onInterruptSpeech = { interruptSpeech() },
                         onMinimize = { hidePanel() },
@@ -242,10 +270,22 @@ class FloatingAssistantService : Service() {
                 }
             }
         }
+
+        // Dismiss panel when user taps outside it
+        panel.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_OUTSIDE) {
+                hidePanel()
+                true
+            } else {
+                false
+            }
+        }
+
         panelView = panel
     }
 
     private fun setupBubbleTouchListener(view: View) {
+        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
         var initialX = 0
         var initialY = 0
         var initialTouchX = 0f
@@ -265,12 +305,15 @@ class FloatingAssistantService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - initialTouchX
                     val dy = event.rawY - initialTouchY
-                    if (hypot(dx, dy) > 12f) {
+                    if (hypot(dx, dy) > touchSlop) {
                         isDragging = true
                     }
                     if (isDragging) {
-                        bubbleParams.x = (initialX + dx).toInt()
-                        bubbleParams.y = (initialY + dy).toInt()
+                        val displayMetrics = resources.displayMetrics
+                        val maxX = displayMetrics.widthPixels - 120
+                        val maxY = displayMetrics.heightPixels - 160
+                        bubbleParams.x = (initialX + dx).toInt().coerceIn(0, maxX)
+                        bubbleParams.y = (initialY + dy).toInt().coerceIn(40, maxY)
                         windowManager?.updateViewLayout(bubbleView, bubbleParams)
                     }
                     true
@@ -300,43 +343,58 @@ class FloatingAssistantService : Service() {
             val screenWidth = displayMetrics.widthPixels
             val screenHeight = displayMetrics.heightPixels
 
-            // Position panel conveniently near the bubble or centered
-            panelParams.x = (bubbleParams.x - 280).coerceIn(20, screenWidth - 350)
-            panelParams.y = bubbleParams.y.coerceIn(100, screenHeight - 500)
+            val panelWidth = (330 * displayMetrics.density).toInt()
+            panelParams.x = (bubbleParams.x - 200).coerceIn(16, (screenWidth - panelWidth - 16).coerceAtLeast(16))
+            panelParams.y = (bubbleParams.y + 70).coerceIn(100, (screenHeight - 540).coerceAtLeast(100))
 
-            windowManager?.addView(panelView, panelParams)
-            isPanelOpen.value = true
+            try {
+                windowManager?.addView(panelView, panelParams)
+                isPanelOpen.value = true
+            } catch (e: Exception) {
+                Log.e(TAG, "Error displaying panel: ${e.message}", e)
+            }
         }
     }
 
     private fun hidePanel() {
         if (panelView != null && isPanelOpen.value) {
-            windowManager?.removeView(panelView)
+            try {
+                windowManager?.removeView(panelView)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error hiding panel: ${e.message}")
+            }
             isPanelOpen.value = false
         }
     }
 
-    private fun startVoiceListening() {
+    private fun startPushToTalk() {
         val app = LiveScreenApp.instance
-        if (!isMicMuted.value) {
-            app.audioInputManager.startListening(
-                language = "hi-IN",
-                continuous = true
-            ) { speechResult ->
-                if (speechResult.isNotBlank() && assistantState.value != AssistantState.THINKING) {
-                    lastTranscript.value = speechResult
-                    askScreenQuestion(speechResult)
-                }
-            }
-            assistantState.value = AssistantState.LISTENING
+        if (assistantState.value == AssistantState.SPEAKING) {
+            interruptSpeech()
         }
+        assistantState.value = AssistantState.LISTENING
+        app.audioInputManager.startListening(
+            language = "hi-IN",
+            continuous = false
+        ) { speechResult ->
+            if (speechResult.isNotBlank() && assistantState.value != AssistantState.THINKING) {
+                lastTranscript.value = speechResult
+                askScreenQuestion(speechResult)
+            }
+        }
+    }
+
+    private fun stopVoiceListening() {
+        val app = LiveScreenApp.instance
+        app.audioInputManager.stopListening()
+        assistantState.value = AssistantState.IDLE
     }
 
     private fun askScreenQuestion(question: String) {
         serviceScope.launch {
             val app = LiveScreenApp.instance
             assistantState.value = AssistantState.THINKING
-            app.audioInputManager.pauseListening()
+            app.audioInputManager.stopListening()
 
             app.chatRepository.addMessage(
                 sessionId = currentSessionId,
@@ -372,24 +430,15 @@ class FloatingAssistantService : Service() {
                     if (settings.autoSpeakResponses) {
                         assistantState.value = AssistantState.SPEAKING
                         app.audioOutputManager.speak(result.text) {
-                            assistantState.value = if (!isMicMuted.value) AssistantState.LISTENING else AssistantState.IDLE
-                            if (!isMicMuted.value) {
-                                app.audioInputManager.resumeListening()
-                            }
+                            assistantState.value = AssistantState.IDLE
                         }
                     } else {
-                        assistantState.value = if (!isMicMuted.value) AssistantState.LISTENING else AssistantState.IDLE
-                        if (!isMicMuted.value) {
-                            app.audioInputManager.resumeListening()
-                        }
+                        assistantState.value = AssistantState.IDLE
                     }
                 }
                 is GeminiResult.Error -> {
                     errorMessage.value = result.errorMessage
-                    assistantState.value = if (!isMicMuted.value) AssistantState.LISTENING else AssistantState.IDLE
-                    if (!isMicMuted.value) {
-                        app.audioInputManager.resumeListening()
-                    }
+                    assistantState.value = AssistantState.IDLE
                 }
             }
         }
@@ -405,23 +454,18 @@ class FloatingAssistantService : Service() {
     }
 
     private fun toggleMicrophone() {
-        val app = LiveScreenApp.instance
         isMicMuted.value = !isMicMuted.value
+        val app = LiveScreenApp.instance
         if (isMicMuted.value) {
             app.audioInputManager.stopListening()
             assistantState.value = AssistantState.IDLE
-        } else {
-            startVoiceListening()
         }
     }
 
     private fun interruptSpeech() {
         val app = LiveScreenApp.instance
         app.audioOutputManager.stop()
-        assistantState.value = if (!isMicMuted.value) AssistantState.LISTENING else AssistantState.IDLE
-        if (!isMicMuted.value) {
-            app.audioInputManager.resumeListening()
-        }
+        assistantState.value = AssistantState.IDLE
     }
 
     private fun stopFloatingAssistant() {
@@ -436,7 +480,11 @@ class FloatingAssistantService : Service() {
         // 2. Remove Views from WindowManager
         hidePanel()
         if (bubbleView != null) {
-            windowManager?.removeView(bubbleView)
+            try {
+                windowManager?.removeView(bubbleView)
+            } catch (e: Exception) {
+                // ignore
+            }
             bubbleView = null
         }
 
@@ -456,7 +504,11 @@ class FloatingAssistantService : Service() {
         runCatching { unregisterReceiver(captureBroadcastReceiver) }
         hidePanel()
         if (bubbleView != null) {
-            windowManager?.removeView(bubbleView)
+            try {
+                windowManager?.removeView(bubbleView)
+            } catch (e: Exception) {
+                // ignore
+            }
             bubbleView = null
         }
         lifecycleOwner.onDestroy()
@@ -501,7 +553,7 @@ class FloatingAssistantService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Live Screen AI Guide फ़्लोटिंग मोड सक्रिय है")
-            .setContentText("स्क्रीन पर फ़्लोटिंग बबल दिखाई दे रहा है • किसी भी ऐप पर सहायता पाएं")
+            .setContentText("स्क्रीन पर फ़्लोटिंग बबल उपलब्ध है • किसी भी ऐप पर सहायता पाएं")
             .setSmallIcon(R.drawable.app_launcher_icon_1791691117930)
             .setContentIntent(pendingOpen)
             .addAction(

@@ -1,7 +1,6 @@
 package com.example.ui.theme
 
 import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -13,22 +12,26 @@ import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme =
     darkColorScheme(
-        primary = Color(0xFF818CF8),
-        onPrimary = Color(0xFF1E1B4B),
-        primaryContainer = Color(0xFF3730A3),
+        primary = IndigoLight,
+        onPrimary = Color(0xFF0F172A),
+        primaryContainer = Color(0xFF312E81),
         onPrimaryContainer = Color(0xFFE0E7FF),
-        secondary = CyanAccent,
+        secondary = CyanLight,
         onSecondary = Color(0xFF083344),
         secondaryContainer = Color(0xFF164E63),
         onSecondaryContainer = Color(0xFFCFFAFE),
         tertiary = VioletTertiary,
         onTertiary = Color(0xFF2E1065),
         background = DarkBackground,
-        onBackground = Color(0xFFF1F5F9),
+        onBackground = TextPrimary,
         surface = DarkSurface,
-        onSurface = Color(0xFFF1F5F9),
+        onSurface = TextPrimary,
         surfaceVariant = DarkSurfaceElevated,
-        onSurfaceVariant = Color(0xFFCBD5E1),
+        onSurfaceVariant = TextSecondary,
+        outline = DarkSurfaceBorder,
+        outlineVariant = Color(0xFF273142),
+        error = ErrorRed,
+        onError = Color.White
     )
 
 private val LightColorScheme =
@@ -43,18 +46,22 @@ private val LightColorScheme =
         onSecondaryContainer = Color(0xFF164E63),
         tertiary = Color(0xFF7C3AED),
         onTertiary = Color.White,
-        background = LightBackground,
+        background = Color(0xFFF1F5F9),
         onBackground = Color(0xFF0F172A),
-        surface = LightSurface,
+        surface = Color.White,
         onSurface = Color(0xFF0F172A),
-        surfaceVariant = LightSurfaceElevated,
-        onSurfaceVariant = Color(0xFF475569),
+        surfaceVariant = Color(0xFFE2E8F0),
+        onSurfaceVariant = Color(0xFF334155),
+        outline = Color(0xFFCBD5E1),
+        outlineVariant = Color(0xFFE2E8F0),
+        error = ErrorRed,
+        onError = Color.White
     )
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    darkTheme: Boolean = true, // Dark-first default for modern, immersive UI
+    dynamicColor: Boolean = false, // Keep consistent branded dark palette
     content: @Composable () -> Unit,
 ) {
   val colorScheme =
