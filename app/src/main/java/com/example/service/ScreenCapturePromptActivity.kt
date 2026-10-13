@@ -15,6 +15,8 @@ class ScreenCapturePromptActivity : ComponentActivity() {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val app = LiveScreenApp.instance
+            // Start the dedicated mediaProjection foreground service first (Android 14+ mandate)
+            ScreenGuideService.startService(this)
             app.screenCaptureManager.startCapture(result.resultCode, result.data!!)
             val intent = Intent(FloatingAssistantService.ACTION_SCREEN_CAPTURE_GRANTED)
             sendBroadcast(intent)

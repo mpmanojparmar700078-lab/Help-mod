@@ -300,7 +300,7 @@ fun FloatingPanelContent(
                                 modifier = Modifier.size(18.dp)
                             )
                         }
-                    } else if (latestFrame != null && isCapturing) {
+                    } else if (latestFrame != null && isCapturing && !latestFrame.isRecycled) {
                         Box(
                             modifier = Modifier
                                 .size(width = 24.dp, height = 36.dp)

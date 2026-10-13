@@ -523,7 +523,7 @@ fun LiveSessionScreen(
                     )
 
                     // Small screen thumbnail preview badge
-                    if (latestFrame != null && isCapturing) {
+                    if (latestFrame != null && isCapturing && !latestFrame!!.isRecycled) {
                         Box(
                             modifier = Modifier
                                 .size(width = 32.dp, height = 48.dp)
