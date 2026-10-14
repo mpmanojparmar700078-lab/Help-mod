@@ -23,7 +23,7 @@ data class UserSettings(
     val autoSpeakResponses: Boolean = true,
     val frameCaptureIntervalMs: Long = 2500L,
     val explanationDetail: String = "concise", // "concise" or "detailed"
-    val continuousVoiceEnabled: Boolean = true,
+    val continuousVoiceEnabled: Boolean = false,
     val floatingIndicatorEnabled: Boolean = true
 ) {
     val effectiveApiKey: String
@@ -52,7 +52,7 @@ class SettingsRepository(private val context: Context) {
             autoSpeakResponses = preferences[PreferencesKeys.AUTO_SPEAK] ?: true,
             frameCaptureIntervalMs = preferences[PreferencesKeys.FRAME_INTERVAL] ?: 2500L,
             explanationDetail = preferences[PreferencesKeys.EXPLANATION_DETAIL] ?: "concise",
-            continuousVoiceEnabled = preferences[PreferencesKeys.CONTINUOUS_VOICE] ?: true,
+            continuousVoiceEnabled = preferences[PreferencesKeys.CONTINUOUS_VOICE] ?: false,
             floatingIndicatorEnabled = preferences[PreferencesKeys.FLOATING_INDICATOR] ?: true
         )
     }

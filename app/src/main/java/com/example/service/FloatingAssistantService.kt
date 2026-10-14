@@ -13,7 +13,9 @@ import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ViewConfiguration
@@ -73,12 +75,13 @@ class FloatingAssistantService : Service() {
         }
     }
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var serviceJob = SupervisorJob()
+    private var serviceScope = CoroutineScope(serviceJob + Dispatchers.Main)
     private var windowManager: WindowManager? = null
 
     private var bubbleContainer: FrameLayout? = null
     private var panelContainer: FrameLayout? = null
-    private val lifecycleOwner = OverlayLifecycleOwner()
+    private var lifecycleOwner: OverlayLifecycleOwner? = null
 
     private lateinit var bubbleParams: WindowManager.LayoutParams
     private lateinit var panelParams: WindowManager.LayoutParams
@@ -104,7 +107,9 @@ class FloatingAssistantService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        lifecycleOwner.onCreate()
+        serviceJob = SupervisorJob()
+        serviceScope = CoroutineScope(serviceJob + Dispatchers.Main)
+        lifecycleOwner = OverlayLifecycleOwner()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
 
@@ -123,19 +128,33 @@ class FloatingAssistantService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START -> {
+                if (!Settings.canDrawOverlays(this)) {
+                    Log.e(TAG, "Cannot start overlay: overlay permission not granted")
+                    _isRunning.value = false
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
                 _isRunning.value = true
                 val notification = buildNotification()
 
-                // Foreground service startup with microphone type (or standard for older APIs)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Foreground service startup with specialUse type for Android 14+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     try {
                         startForeground(
                             NOTIFICATION_ID,
                             notification,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                         )
                     } catch (e: Exception) {
-                        Log.e(TAG, "startForeground error: ${e.message}, falling back")
+                        Log.e(TAG, "startForeground specialUse error: ${e.message}, falling back", e)
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        startForeground(NOTIFICATION_ID, notification, 0)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "startForeground error: ${e.message}, falling back", e)
                         startForeground(NOTIFICATION_ID, notification)
                     }
                 } else {
@@ -151,6 +170,13 @@ class FloatingAssistantService : Service() {
     private fun initOverlayWindows() {
         if (bubbleContainer != null) return
 
+        if (!Settings.canDrawOverlays(this)) {
+            Log.e(TAG, "Overlay permission not granted in initOverlayWindows")
+            _isRunning.value = false
+            stopSelf()
+            return
+        }
+
         val displayMetrics = resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels
 
@@ -161,7 +187,7 @@ class FloatingAssistantService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        // 1. Bubble Layout Params (without FLAG_LAYOUT_NO_LIMITS for stable coordinate tracking)
+        // 1. Bubble Layout Params
         bubbleParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -189,10 +215,18 @@ class FloatingAssistantService : Service() {
             y = 200
         }
 
-        // FrameLayout wrapper for the draggable Bubble
-        val container = FrameLayout(this)
-        val composeBubble = ComposeView(this).apply {
-            lifecycleOwner.attachToComposeView(this)
+        val themedContext = ContextThemeWrapper(this, R.style.Theme_MyApplication)
+        val owner = lifecycleOwner ?: OverlayLifecycleOwner().also { lifecycleOwner = it }
+
+        // Root container for Bubble with touch interception
+        val container = object : FrameLayout(themedContext) {
+            override fun onInterceptTouchEvent(ev: MotionEvent?): Boolean = true
+        }
+        // Crucial: attach ViewTreeLifecycleOwner and ViewTreeSavedStateRegistryOwner to the root window view
+        owner.attachToView(container)
+
+        val composeBubble = ComposeView(themedContext).apply {
+            owner.attachToView(this)
             setContent {
                 MyApplicationTheme {
                     val app = LiveScreenApp.instance
@@ -215,12 +249,18 @@ class FloatingAssistantService : Service() {
             Log.d(TAG, "Bubble overlay attached to WindowManager successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Error adding bubble overlay: ${e.message}", e)
+            bubbleContainer = null
+            _isRunning.value = false
+            stopSelf()
+            return
         }
 
         // FrameLayout wrapper for the Floating Panel
-        val panelCont = FrameLayout(this)
-        val composePanel = ComposeView(this).apply {
-            lifecycleOwner.attachToComposeView(this)
+        val panelCont = FrameLayout(themedContext)
+        owner.attachToView(panelCont)
+
+        val composePanel = ComposeView(themedContext).apply {
+            owner.attachToView(this)
             setContent {
                 MyApplicationTheme {
                     val app = LiveScreenApp.instance
@@ -296,13 +336,13 @@ class FloatingAssistantService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - initialTouchX).toInt()
                     val dy = (event.rawY - initialTouchY).toInt()
-                    if (hypot(dx.toDouble(), dy.toDouble()) > touchSlop) {
+                    if (!isDragging && hypot(dx.toDouble(), dy.toDouble()) > touchSlop) {
                         isDragging = true
                     }
                     if (isDragging) {
                         val metrics = resources.displayMetrics
-                        val maxX = metrics.widthPixels - 120
-                        val maxY = metrics.heightPixels - 150
+                        val maxX = (metrics.widthPixels - 120).coerceAtLeast(0)
+                        val maxY = (metrics.heightPixels - 140).coerceAtLeast(0)
                         bubbleParams.x = (initialX + dx).coerceIn(0, maxX)
                         bubbleParams.y = (initialY + dy).coerceIn(40, maxY)
                         try {
@@ -317,6 +357,11 @@ class FloatingAssistantService : Service() {
                     if (!isDragging) {
                         togglePanel()
                     }
+                    isDragging = false
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    isDragging = false
                     true
                 }
                 else -> false
@@ -335,14 +380,20 @@ class FloatingAssistantService : Service() {
     private fun showPanel() {
         if (panelContainer != null && !isPanelOpen.value) {
             val metrics = resources.displayMetrics
-            val panelWidth = (330 * metrics.density).toInt()
-            panelParams.x = (bubbleParams.x - panelWidth / 2).coerceIn(16, (metrics.widthPixels - panelWidth - 16).coerceAtLeast(16))
-            panelParams.y = (bubbleParams.y + 130).coerceIn(80, (metrics.heightPixels - 560).coerceAtLeast(80))
+            val panelWidth = (340 * metrics.density).toInt().coerceAtMost(metrics.widthPixels - 32)
+            panelParams.width = panelWidth
+            panelParams.x = (bubbleParams.x - panelWidth / 2 + 30).coerceIn(16, (metrics.widthPixels - panelWidth - 16).coerceAtLeast(16))
+            val estimatedPanelHeight = (420 * metrics.density).toInt()
+            if (bubbleParams.y > metrics.heightPixels / 2) {
+                panelParams.y = (bubbleParams.y - estimatedPanelHeight - 16).coerceIn(60, metrics.heightPixels - 100)
+            } else {
+                panelParams.y = (bubbleParams.y + 130).coerceIn(60, (metrics.heightPixels - estimatedPanelHeight - 40).coerceAtLeast(60))
+            }
 
             try {
                 windowManager?.addView(panelContainer, panelParams)
                 isPanelOpen.value = true
-                Log.d(TAG, "Floating panel displayed")
+                Log.d(TAG, "Floating panel displayed at x=${panelParams.x}, y=${panelParams.y}")
             } catch (e: Exception) {
                 Log.e(TAG, "Error adding panel overlay: ${e.message}", e)
             }
@@ -350,12 +401,15 @@ class FloatingAssistantService : Service() {
     }
 
     private fun hidePanel() {
-        if (panelContainer != null && isPanelOpen.value) {
+        val cont = panelContainer
+        if (cont != null && (isPanelOpen.value || cont.isAttachedToWindow)) {
             try {
-                windowManager?.removeView(panelContainer)
+                if (cont.isAttachedToWindow) {
+                    windowManager?.removeView(cont)
+                }
                 Log.d(TAG, "Floating panel hidden")
             } catch (e: Exception) {
-                Log.e(TAG, "Error removing panel overlay: ${e.message}")
+                Log.w(TAG, "Error removing panel overlay: ${e.message}")
             }
             isPanelOpen.value = false
         }
@@ -473,14 +527,16 @@ class FloatingAssistantService : Service() {
         app.audioOutputManager.stop()
 
         hidePanel()
-        if (bubbleContainer != null) {
+        val bubble = bubbleContainer
+        if (bubble != null && bubble.isAttachedToWindow) {
             try {
-                windowManager?.removeView(bubbleContainer)
+                windowManager?.removeView(bubble)
             } catch (e: Exception) {
-                // ignore
+                Log.w(TAG, "Error removing bubbleContainer: ${e.message}")
             }
-            bubbleContainer = null
         }
+        bubbleContainer = null
+        panelContainer = null
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -496,15 +552,18 @@ class FloatingAssistantService : Service() {
         _isRunning.value = false
         runCatching { unregisterReceiver(captureBroadcastReceiver) }
         hidePanel()
-        if (bubbleContainer != null) {
+        val bubble = bubbleContainer
+        if (bubble != null && bubble.isAttachedToWindow) {
             try {
-                windowManager?.removeView(bubbleContainer)
+                windowManager?.removeView(bubble)
             } catch (e: Exception) {
-                // ignore
+                Log.w(TAG, "Error removing bubbleContainer: ${e.message}")
             }
-            bubbleContainer = null
         }
-        lifecycleOwner.onDestroy()
+        bubbleContainer = null
+        panelContainer = null
+        lifecycleOwner?.onDestroy()
+        lifecycleOwner = null
         serviceScope.cancel()
     }
 

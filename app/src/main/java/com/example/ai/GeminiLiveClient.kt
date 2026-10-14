@@ -23,8 +23,8 @@ class GeminiLiveClient {
     companion object {
         private const val TAG = "GeminiLiveClient"
         // Compliant, supported multimodal vision models for Gemini API
-        const val PRIMARY_MODEL = "gemini-3.5-flash"
-        const val FALLBACK_MODEL = "gemini-flash-latest"
+        const val PRIMARY_MODEL = "gemini-flash-latest"
+        const val FALLBACK_MODEL = "gemini-3.5-flash"
     }
 
     private val client = OkHttpClient.Builder()
@@ -130,12 +130,18 @@ class GeminiLiveClient {
                     Log.d(TAG, "No screen frame available for this request")
                 }
 
-                val promptText = if (userQuestion.isNotBlank()) {
-                    userQuestion
-                } else if (hasValidFrame) {
-                    "मेरी स्क्रीन पर अभी क्या दिखाई दे रहा है और मुझे यहाँ क्या करना चाहिए?"
+                val promptText = if (hasValidFrame) {
+                    if (userQuestion.isNotBlank()) {
+                        "उपयोगकर्ता का प्रश्न: $userQuestion\n\n(कृपया संलग्न स्क्रीनशॉट को ध्यान से देखें। स्क्रीन पर मौजूद मुख्य टेक्स्ट, बटन, आइकन या त्रुटि संदेश का सीधे संदर्भ देते हुए व्यावहारिक मार्गदर्शन दें।)"
+                    } else {
+                        "मेरी वर्तमान स्क्रीन का विश्लेषण करें: अभी स्क्रीन पर क्या खुला है और मुझे यहाँ क्या करना चाहिए?"
+                    }
                 } else {
-                    "स्क्रीन शेयरिंग अभी बंद है। कृपया मुझे बताएं कि स्क्रीन शेयरिंग कैसे शुरू करें।"
+                    if (userQuestion.isNotBlank()) {
+                        userQuestion
+                    } else {
+                        "स्क्रीन शेयरिंग अभी बंद है। कृपया मुझे बताएं कि स्क्रीन शेयरिंग कैसे शुरू करें।"
+                    }
                 }
                 parts.put(JSONObject().apply { put("text", promptText) })
 
@@ -152,7 +158,7 @@ class GeminiLiveClient {
             }
             root.put("generationConfig", genConfig)
 
-            // Try primary model (gemini-3.5-flash), fallback to gemini-flash-latest
+            // Try primary model (gemini-flash-latest), fallback to gemini-3.5-flash
             var result = executeGenerateContent(PRIMARY_MODEL, trimmedKey, root)
             if (result is GeminiResult.Error && (result.errorCode == "404" || result.errorCode == "400")) {
                 Log.w(TAG, "Primary model $PRIMARY_MODEL returned ${result.errorCode}, trying fallback to $FALLBACK_MODEL")
@@ -238,9 +244,26 @@ class GeminiLiveClient {
 
     private fun bitmapToBase64(bitmap: Bitmap): String {
         return try {
+            if (bitmap.isRecycled) return ""
+            // Scale bitmap so max dimension is at most 1024 for fast transfer & optimal AI vision
+            val maxDim = 1024
+            val width = bitmap.width
+            val height = bitmap.height
+            val scaledBitmap = if (width > maxDim || height > maxDim) {
+                val ratio = minOf(maxDim.toFloat() / width, maxDim.toFloat() / height)
+                val newWidth = maxOf(1, (width * ratio).toInt())
+                val newHeight = maxOf(1, (height * ratio).toInt())
+                Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+            } else {
+                bitmap
+            }
+
             val outputStream = ByteArrayOutputStream()
             // Compress as JPEG at 80% quality for optimal balance of image detail & fast transfer
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
+            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
+            if (scaledBitmap != bitmap) {
+                scaledBitmap.recycle()
+            }
             val byteArray = outputStream.toByteArray()
             Base64.encodeToString(byteArray, Base64.NO_WRAP)
         } catch (e: Exception) {
