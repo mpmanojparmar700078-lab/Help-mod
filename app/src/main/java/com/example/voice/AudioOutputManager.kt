@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,6 +13,7 @@ import java.util.Locale
 import java.util.UUID
 
 class AudioOutputManager(private val context: Context) : TextToSpeech.OnInitListener {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var tts: TextToSpeech? = null
     private var isInitialized = false
 
@@ -53,21 +56,30 @@ class AudioOutputManager(private val context: Context) : TextToSpeech.OnInitList
 
                 override fun onDone(utteranceId: String?) {
                     _isSpeaking.value = false
-                    pendingOnComplete?.invoke()
-                    pendingOnComplete = null
+                    mainHandler.post {
+                        val cb = pendingOnComplete
+                        pendingOnComplete = null
+                        cb?.invoke()
+                    }
                 }
 
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
                     _isSpeaking.value = false
-                    pendingOnComplete?.invoke()
-                    pendingOnComplete = null
+                    mainHandler.post {
+                        val cb = pendingOnComplete
+                        pendingOnComplete = null
+                        cb?.invoke()
+                    }
                 }
 
                 override fun onError(utteranceId: String?, errorCode: Int) {
                     _isSpeaking.value = false
-                    pendingOnComplete?.invoke()
-                    pendingOnComplete = null
+                    mainHandler.post {
+                        val cb = pendingOnComplete
+                        pendingOnComplete = null
+                        cb?.invoke()
+                    }
                 }
             })
 

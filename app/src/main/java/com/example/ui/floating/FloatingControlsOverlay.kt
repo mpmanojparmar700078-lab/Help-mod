@@ -32,6 +32,10 @@ import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.platform.testTag
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -180,7 +184,8 @@ fun FloatingPanelContent(
 ) {
     Card(
         modifier = modifier
-            .width(330.dp),
+            .fillMaxWidth()
+            .heightIn(max = 520.dp),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = Color(0xF50F172A)
@@ -189,7 +194,9 @@ fun FloatingPanelContent(
         elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier
+                .padding(14.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             // Header Bar with branding, minimize and close
@@ -244,7 +251,9 @@ fun FloatingPanelContent(
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     IconButton(
                         onClick = onMinimize,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("floating_minimize_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowDown,
@@ -255,7 +264,9 @@ fun FloatingPanelContent(
                     }
                     IconButton(
                         onClick = onEndSession,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("floating_close_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
@@ -291,13 +302,15 @@ fun FloatingPanelContent(
                     if (assistantState == AssistantState.SPEAKING) {
                         IconButton(
                             onClick = onInterruptSpeech,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier
+                                .size(32.dp)
+                                .testTag("floating_interrupt_speech_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Stop,
                                 contentDescription = "आवाज़ रोकें (Stop speech)",
                                 tint = SpeakingPurple,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     } else if (latestFrame != null && isCapturing && !latestFrame.isRecycled) {
@@ -339,13 +352,15 @@ fun FloatingPanelContent(
                         )
                         IconButton(
                             onClick = onRetry,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier
+                                .size(28.dp)
+                                .testTag("floating_retry_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "पुनः प्रयास",
                                 tint = Color(0xFFFCA5A5),
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -400,7 +415,8 @@ fun FloatingPanelContent(
                 onClick = onAskScreenNow,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(44.dp),
+                    .height(44.dp)
+                    .testTag("floating_ask_screen_button"),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -420,7 +436,7 @@ fun FloatingPanelContent(
                 )
             }
 
-            // Push-to-Talk Voice Button (Reliable speech input)
+            // Continuous Voice Conversation Button
             val isCurrentlyListening = assistantState == AssistantState.LISTENING || voiceState == VoiceInputState.LISTENING
             Button(
                 onClick = {
@@ -432,21 +448,27 @@ fun FloatingPanelContent(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(40.dp),
+                    .height(44.dp)
+                    .testTag("floating_voice_toggle_button"),
                 shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isCurrentlyListening) ListeningGreen else Color(0xFF334155),
-                    contentColor = Color.White
+                    contentColor = if (isCurrentlyListening) Color(0xFF0F172A) else Color.White
                 )
             ) {
                 Icon(
-                    imageVector = if (isCurrentlyListening) Icons.Default.Stop else Icons.Default.Mic,
+                    imageVector = if (isCurrentlyListening) Icons.Default.Mic else Icons.Default.MicOff,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (isCurrentlyListening) "सुन रहे हैं... (टैप करके रोकें)" else "बोलने के लिए टैप करें (Push to Talk)",
+                    text = when {
+                        isCurrentlyListening -> "माइक सुन रहा है... (रोकने के लिए टैप करें)"
+                        assistantState == AssistantState.THINKING -> "विचार कर रहे हैं..."
+                        assistantState == AssistantState.SPEAKING -> "उत्तर बोल रहे हैं... (रोकने के लिए टैप करें)"
+                        else -> "माइक चालू करें (सतत वॉइस सहायता)"
+                    },
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -462,7 +484,8 @@ fun FloatingPanelContent(
                     onClick = onToggleScreenShare,
                     modifier = Modifier
                         .weight(1f)
-                        .height(38.dp),
+                        .height(40.dp)
+                        .testTag("floating_screen_share_button"),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = if (isCapturing) Color(0x3310B981) else Color(0xFF334155),
@@ -487,7 +510,8 @@ fun FloatingPanelContent(
                     onClick = onToggleMic,
                     modifier = Modifier
                         .weight(1f)
-                        .height(38.dp),
+                        .height(40.dp)
+                        .testTag("floating_mic_mute_button"),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = if (isMicMuted) Color(0x33EF4444) else Color(0xFF334155),

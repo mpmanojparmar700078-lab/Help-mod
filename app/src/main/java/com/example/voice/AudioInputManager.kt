@@ -96,8 +96,37 @@ class AudioInputManager(private val context: Context) {
             override fun onError(error: Int) {
                 Log.w(TAG, "onError: code $error")
                 _rmsDb.value = 0f
-                _isListening.value = false
 
+                val isNormalSilence = error == SpeechRecognizer.ERROR_NO_MATCH ||
+                        error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+
+                if (isContinuous && !isManuallyStopped && isNormalSilence) {
+                    // Normal conversational pause by the user: remain in LISTENING mode without flashing errors
+                    _voiceState.value = VoiceInputState.LISTENING
+                    _recognitionError.value = null
+                    mainHandler.postDelayed({
+                        if (isContinuous && !isManuallyStopped) {
+                            startListeningInternal()
+                        }
+                    }, 250)
+                    return
+                }
+
+                if (isContinuous && !isManuallyStopped && (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT)) {
+                    try {
+                        speechRecognizer?.cancel()
+                        speechRecognizer?.destroy()
+                        speechRecognizer = null
+                    } catch (_: Exception) {}
+                    mainHandler.postDelayed({
+                        if (isContinuous && !isManuallyStopped) {
+                            startListeningInternal()
+                        }
+                    }, 350)
+                    return
+                }
+
+                _isListening.value = false
                 val message = when (error) {
                     SpeechRecognizer.ERROR_AUDIO -> "ऑडियो रिकॉर्डिंग त्रुटि"
                     SpeechRecognizer.ERROR_CLIENT -> "रिकग्निशन क्लाइंट त्रुटि"
@@ -113,22 +142,11 @@ class AudioInputManager(private val context: Context) {
 
                 _voiceState.value = VoiceInputState.ERROR
                 _recognitionError.value = message
-
-                // Do NOT aggressively loop in background if silent or no match
-                // Only if continuous mode is explicitly enabled by the user and not manually stopped
-                if (isContinuous && !isManuallyStopped && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
-                    mainHandler.postDelayed({
-                        if (isContinuous && !isManuallyStopped) {
-                            startListeningInternal()
-                        }
-                    }, 1200)
-                }
             }
 
             override fun onResults(results: Bundle?) {
                 _rmsDb.value = 0f
                 _isListening.value = false
-                _voiceState.value = VoiceInputState.IDLE
 
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val recognizedText = matches?.firstOrNull()?.trim()
@@ -136,16 +154,18 @@ class AudioInputManager(private val context: Context) {
 
                 if (!recognizedText.isNullOrEmpty()) {
                     _partialTranscript.value = recognizedText
+                    _voiceState.value = VoiceInputState.PROCESSING
                     onSpeechResultCallback?.invoke(recognizedText)
-                }
-
-                // If continuous mode is explicitly enabled and not stopped, listen again after pause
-                if (isContinuous && !isManuallyStopped) {
-                    mainHandler.postDelayed({
-                        if (isContinuous && !isManuallyStopped) {
-                            startListeningInternal()
-                        }
-                    }, 1000)
+                } else {
+                    _voiceState.value = VoiceInputState.IDLE
+                    // If no text but continuous mode is active, smoothly listen again
+                    if (isContinuous && !isManuallyStopped) {
+                        mainHandler.postDelayed({
+                            if (isContinuous && !isManuallyStopped) {
+                                startListeningInternal()
+                            }
+                        }, 250)
+                    }
                 }
             }
 
@@ -163,9 +183,9 @@ class AudioInputManager(private val context: Context) {
     }
 
     /**
-     * Starts listening with optional continuous mode (defaults to push-to-talk single query)
+     * Starts listening with optional continuous mode (defaults to true for active assistant sessions)
      */
-    fun startListening(language: String = "hi-IN", continuous: Boolean = false, onResult: (String) -> Unit) {
+    fun startListening(language: String = "hi-IN", continuous: Boolean = true, onResult: (String) -> Unit) {
         targetLanguage = language
         isContinuous = continuous
         isManuallyStopped = false
@@ -179,7 +199,12 @@ class AudioInputManager(private val context: Context) {
     private fun startListeningInternal() {
         mainHandler.post {
             try {
+                if (isManuallyStopped) return@post
                 initRecognizerIfNeeded()
+                try {
+                    speechRecognizer?.cancel()
+                } catch (_: Exception) {}
+
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, targetLanguage)
@@ -187,10 +212,10 @@ class AudioInputManager(private val context: Context) {
                     putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, targetLanguage)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                    // Noise and pause thresholds for mobile device usage
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1400L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
+                    // Configured pause thresholds to permit natural speaking pauses without abrupt cuts
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1200L)
                 }
                 speechRecognizer?.startListening(intent)
             } catch (e: Exception) {
@@ -205,8 +230,10 @@ class AudioInputManager(private val context: Context) {
         mainHandler.post {
             try {
                 speechRecognizer?.stopListening()
+                speechRecognizer?.cancel()
                 _isListening.value = false
                 _voiceState.value = VoiceInputState.IDLE
+                _rmsDb.value = 0f
             } catch (e: Exception) {
                 // ignore
             }
@@ -215,6 +242,7 @@ class AudioInputManager(private val context: Context) {
 
     fun resumeListening() {
         if (!isManuallyStopped) {
+            _recognitionError.value = null
             startListeningInternal()
         }
     }

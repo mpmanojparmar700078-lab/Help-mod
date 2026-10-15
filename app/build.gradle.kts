@@ -16,10 +16,13 @@ android {
     applicationId = "com.aistudio.livescreen.krwyt"
     minSdk = 24
     targetSdk = 36
-    val envVersionCode = providers.environmentVariable("VERSION_CODE").orNull?.toIntOrNull() ?: 1
-    val envVersionName = providers.environmentVariable("VERSION_NAME").orNull ?: "1.0.0"
-    versionCode = envVersionCode
-    versionName = envVersionName
+    val propVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull()
+    val envVersionCode = providers.environmentVariable("VERSION_CODE").orNull?.toIntOrNull()
+    val propVersionName = project.findProperty("versionName")?.toString()
+    val envVersionName = providers.environmentVariable("VERSION_NAME").orNull
+
+    versionCode = propVersionCode ?: envVersionCode ?: 2
+    versionName = propVersionName ?: envVersionName ?: "1.0.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
