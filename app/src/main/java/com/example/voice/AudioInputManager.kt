@@ -79,7 +79,9 @@ class AudioInputManager(private val context: Context) {
             }
 
             override fun onRmsChanged(rmsdB: Float) {
-                _rmsDb.value = rmsdB
+                if (kotlin.math.abs(rmsdB - _rmsDb.value) > 0.4f || rmsdB <= 0.1f) {
+                    _rmsDb.value = rmsdB
+                }
                 if (rmsdB > SPEECH_RMS_THRESHOLD && _voiceState.value == VoiceInputState.LISTENING) {
                     _voiceState.value = VoiceInputState.SPEECH_DETECTED
                 }
@@ -96,6 +98,7 @@ class AudioInputManager(private val context: Context) {
             override fun onError(error: Int) {
                 Log.w(TAG, "onError: code $error")
                 _rmsDb.value = 0f
+                _isListening.value = false
 
                 val isNormalSilence = error == SpeechRecognizer.ERROR_NO_MATCH ||
                         error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
@@ -122,11 +125,10 @@ class AudioInputManager(private val context: Context) {
                         if (isContinuous && !isManuallyStopped) {
                             startListeningInternal()
                         }
-                    }, 350)
+                    }, 400)
                     return
                 }
 
-                _isListening.value = false
                 val message = when (error) {
                     SpeechRecognizer.ERROR_AUDIO -> "ऑडियो रिकॉर्डिंग त्रुटि"
                     SpeechRecognizer.ERROR_CLIENT -> "रिकग्निशन क्लाइंट त्रुटि"
@@ -140,6 +142,26 @@ class AudioInputManager(private val context: Context) {
                     else -> "स्पीच पहचान त्रुटि ($error)"
                 }
 
+                // If continuous voice session is active and error is recoverable, auto-recover
+                if (isContinuous && !isManuallyStopped && error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                    Log.i(TAG, "Transient recognition error ($error: $message) in continuous mode. Auto-recovering.")
+                    _voiceState.value = VoiceInputState.ERROR
+                    _recognitionError.value = message
+                    try {
+                        speechRecognizer?.cancel()
+                        speechRecognizer?.destroy()
+                        speechRecognizer = null
+                    } catch (_: Exception) {}
+                    mainHandler.postDelayed({
+                        if (isContinuous && !isManuallyStopped) {
+                            Log.d(TAG, "Executing auto-recovery restart of speech recognition")
+                            startListeningInternal()
+                        }
+                    }, 800)
+                    return
+                }
+
+                // Permanent stop only on missing permissions or explicit stop
                 _voiceState.value = VoiceInputState.ERROR
                 _recognitionError.value = message
             }
@@ -201,9 +223,6 @@ class AudioInputManager(private val context: Context) {
             try {
                 if (isManuallyStopped) return@post
                 initRecognizerIfNeeded()
-                try {
-                    speechRecognizer?.cancel()
-                } catch (_: Exception) {}
 
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -222,6 +241,17 @@ class AudioInputManager(private val context: Context) {
                 Log.e(TAG, "Error starting speech recognition: ${e.message}", e)
                 _voiceState.value = VoiceInputState.ERROR
                 _recognitionError.value = "माइक्रोफ़ोन प्रारंभ करने में त्रुटि: ${e.message}"
+                if (isContinuous && !isManuallyStopped) {
+                    mainHandler.postDelayed({
+                        if (isContinuous && !isManuallyStopped) {
+                            try {
+                                speechRecognizer?.destroy()
+                                speechRecognizer = null
+                            } catch (_: Exception) {}
+                            startListeningInternal()
+                        }
+                    }, 1000)
+                }
             }
         }
     }
@@ -248,7 +278,9 @@ class AudioInputManager(private val context: Context) {
     }
 
     fun stopListening() {
+        isContinuous = false
         isManuallyStopped = true
+        mainHandler.removeCallbacksAndMessages(null)
         mainHandler.post {
             try {
                 speechRecognizer?.stopListening()

@@ -2,10 +2,11 @@ package com.example.voice
 
 import android.content.Context
 import android.os.Bundle
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.os.Handler
 import android.os.Looper
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,6 +14,10 @@ import java.util.Locale
 import java.util.UUID
 
 class AudioOutputManager(private val context: Context) : TextToSpeech.OnInitListener {
+    companion object {
+        private const val TAG = "AudioOutputManager"
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var tts: TextToSpeech? = null
     private var isInitialized = false
@@ -108,6 +113,8 @@ class AudioOutputManager(private val context: Context) : TextToSpeech.OnInitList
         }
     }
 
+    private var speechWatchdogRunnable: Runnable? = null
+
     fun speak(text: String, onComplete: (() -> Unit)? = null) {
         if (!isInitialized || text.isBlank()) {
             onComplete?.invoke()
@@ -121,14 +128,43 @@ class AudioOutputManager(private val context: Context) : TextToSpeech.OnInitList
             putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
         }
 
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+        val result = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+        if (result != TextToSpeech.SUCCESS) {
+            Log.w(TAG, "tts.speak failed with status code $result, triggering fallback completion")
+            _isSpeaking.value = false
+            val cb = pendingOnComplete
+            pendingOnComplete = null
+            cb?.invoke()
+            return
+        }
+
+        // Safety watchdog: if speech engine somehow stalls and never calls onDone, force recovery
+        speechWatchdogRunnable?.let { mainHandler.removeCallbacks(it) }
+        val timeoutMs = (text.length * 120L + 8000L).coerceIn(8000L, 30000L)
+        speechWatchdogRunnable = Runnable {
+            if (_isSpeaking.value) {
+                Log.w(TAG, "TTS speech timed out after ${timeoutMs}ms, forcing completion")
+                stop()
+            }
+        }.also {
+            mainHandler.postDelayed(it, timeoutMs)
+        }
     }
 
     fun stop() {
-        tts?.stop()
+        speechWatchdogRunnable?.let {
+            mainHandler.removeCallbacks(it)
+            speechWatchdogRunnable = null
+        }
+        try {
+            tts?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping TTS: ${e.message}")
+        }
         _isSpeaking.value = false
-        pendingOnComplete?.invoke()
+        val cb = pendingOnComplete
         pendingOnComplete = null
+        cb?.invoke()
     }
 
     fun release() {

@@ -220,6 +220,7 @@ class FloatingAssistantService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             windowType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -281,15 +282,13 @@ class FloatingAssistantService : Service() {
 
         return ComposeView(themedContext).apply {
             owner.attachToView(this)
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(owner))
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool)
             setContent {
                 MyApplicationTheme {
                     val app = LiveScreenApp.instance
                     val isCapturing by app.screenCaptureManager.isCapturing.collectAsState()
-                    val latestFrame by app.screenCaptureManager.latestFrame.collectAsState()
                     val state by assistantState.collectAsState()
                     val muted by isMicMuted.collectAsState()
-                    val rms by app.audioInputManager.rmsDb.collectAsState()
                     val transcript by lastTranscript.collectAsState()
                     val responseText by lastResponse.collectAsState()
                     val errorMsg by errorMessage.collectAsState()
@@ -300,8 +299,8 @@ class FloatingAssistantService : Service() {
                         voiceState = voiceState,
                         isCapturing = isCapturing,
                         isMicMuted = muted,
-                        latestFrame = latestFrame,
-                        rmsDb = rms,
+                        latestFrameProvider = { app.screenCaptureManager.getLatestFrame() },
+                        rmsDbProvider = { app.audioInputManager.rmsDb.value },
                         lastTranscript = transcript,
                         lastResponse = responseText,
                         errorMessage = errorMsg,
@@ -438,7 +437,8 @@ class FloatingAssistantService : Service() {
                 if (cont.isAttachedToWindow) {
                     windowManager?.removeView(cont)
                 }
-                Log.d(TAG, "Floating panel hidden")
+                (cont as? ComposeView)?.disposeComposition()
+                Log.d(TAG, "Floating panel hidden and composition cleanly disposed")
             } catch (e: Exception) {
                 Log.w(TAG, "Error removing panel overlay: ${e.message}")
             }
@@ -475,65 +475,74 @@ class FloatingAssistantService : Service() {
 
     private fun askScreenQuestion(question: String) {
         serviceScope.launch {
-            val app = LiveScreenApp.instance
-            assistantState.value = AssistantState.THINKING
-            // Pause mic listening while thinking so it doesn't process silence or thinking delays
-            app.audioInputManager.pauseListening()
+            try {
+                val app = LiveScreenApp.instance
+                assistantState.value = AssistantState.THINKING
+                // Pause mic listening while thinking so it doesn't process silence or thinking delays
+                app.audioInputManager.pauseListening()
 
-            app.chatRepository.addMessage(
-                sessionId = currentSessionId,
-                sender = "user",
-                text = question,
-                hindiText = question,
-                hasScreenContext = app.screenCaptureManager.isCapturing.value
-            )
+                app.chatRepository.addMessage(
+                    sessionId = currentSessionId,
+                    sender = "user",
+                    text = question,
+                    hindiText = question,
+                    hasScreenContext = app.screenCaptureManager.isCapturing.value
+                )
 
-            val currentBitmap = app.screenCaptureManager.getLatestFrame()
-            val settings = app.settingsRepository.settingsFlow.first()
+                val currentBitmap = app.screenCaptureManager.getLatestFrame()
+                val settings = app.settingsRepository.settingsFlow.first()
 
-            val result = app.geminiClient.analyzeScreenAndRespond(
-                apiKey = settings.effectiveApiKey,
-                screenBitmap = currentBitmap,
-                userQuestion = question,
-                explanationDetail = settings.explanationDetail,
-                language = settings.preferredLanguage
-            )
+                val result = app.geminiClient.analyzeScreenAndRespond(
+                    apiKey = settings.effectiveApiKey,
+                    screenBitmap = currentBitmap,
+                    userQuestion = question,
+                    explanationDetail = settings.explanationDetail,
+                    language = settings.preferredLanguage
+                )
 
-            when (result) {
-                is GeminiResult.Success -> {
-                    errorMessage.value = null
-                    lastResponse.value = result.text
-                    app.chatRepository.addMessage(
-                        sessionId = currentSessionId,
-                        sender = "assistant",
-                        text = result.text,
-                        hindiText = result.text,
-                        hasScreenContext = currentBitmap != null
-                    )
+                when (result) {
+                    is GeminiResult.Success -> {
+                        errorMessage.value = null
+                        lastResponse.value = result.text
+                        app.chatRepository.addMessage(
+                            sessionId = currentSessionId,
+                            sender = "assistant",
+                            text = result.text,
+                            hindiText = result.text,
+                            hasScreenContext = currentBitmap != null
+                        )
 
-                    if (settings.autoSpeakResponses) {
-                        assistantState.value = AssistantState.SPEAKING
-                        // Microphone remains paused while speaking to eliminate feedback echo
-                        app.audioOutputManager.speak(result.text) {
-                            // Assistant finished speaking: resume continuous listening!
+                        if (settings.autoSpeakResponses) {
+                            assistantState.value = AssistantState.SPEAKING
+                            // Microphone remains paused while speaking to eliminate feedback echo
+                            app.audioOutputManager.speak(result.text) {
+                                // Assistant finished speaking: resume continuous listening!
+                                assistantState.value = AssistantState.IDLE
+                                if (!isMicMuted.value) {
+                                    startContinuousVoiceListening()
+                                }
+                            }
+                        } else {
                             assistantState.value = AssistantState.IDLE
                             if (!isMicMuted.value) {
                                 startContinuousVoiceListening()
                             }
                         }
-                    } else {
+                    }
+                    is GeminiResult.Error -> {
+                        errorMessage.value = result.errorMessage
                         assistantState.value = AssistantState.IDLE
                         if (!isMicMuted.value) {
                             startContinuousVoiceListening()
                         }
                     }
                 }
-                is GeminiResult.Error -> {
-                    errorMessage.value = result.errorMessage
-                    assistantState.value = AssistantState.IDLE
-                    if (!isMicMuted.value) {
-                        startContinuousVoiceListening()
-                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "Unhandled exception during askScreenQuestion: ${e.message}", e)
+                errorMessage.value = "त्रुटि: ${e.message}"
+                assistantState.value = AssistantState.IDLE
+                if (!isMicMuted.value) {
+                    startContinuousVoiceListening()
                 }
             }
         }

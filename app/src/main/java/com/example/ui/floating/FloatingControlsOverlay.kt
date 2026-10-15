@@ -166,8 +166,10 @@ fun FloatingPanelContent(
     voiceState: VoiceInputState,
     isCapturing: Boolean,
     isMicMuted: Boolean,
-    latestFrame: Bitmap?,
-    rmsDb: Float,
+    latestFrame: Bitmap? = null,
+    rmsDb: Float = 0f,
+    latestFrameProvider: () -> Bitmap? = { latestFrame },
+    rmsDbProvider: () -> Float = { rmsDb },
     lastTranscript: String,
     lastResponse: String,
     errorMessage: String?,
@@ -296,7 +298,7 @@ fun FloatingPanelContent(
                     AudioWaveVisualizer(
                         isListening = assistantState == AssistantState.LISTENING && !isMicMuted,
                         isSpeaking = assistantState == AssistantState.SPEAKING,
-                        rmsDb = rmsDb
+                        rmsDb = rmsDbProvider()
                     )
 
                     if (assistantState == AssistantState.SPEAKING) {
@@ -313,18 +315,21 @@ fun FloatingPanelContent(
                                 modifier = Modifier.size(20.dp)
                             )
                         }
-                    } else if (latestFrame != null && isCapturing && !latestFrame.isRecycled) {
-                        Box(
-                            modifier = Modifier
-                                .size(width = 24.dp, height = 36.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
-                        ) {
-                            Image(
-                                bitmap = latestFrame.asImageBitmap(),
-                                contentDescription = "Screen thumbnail",
-                                modifier = Modifier.fillMaxSize()
-                            )
+                    } else {
+                        val currentFrame = latestFrameProvider()
+                        if (currentFrame != null && isCapturing && !currentFrame.isRecycled) {
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 24.dp, height = 36.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
+                            ) {
+                                Image(
+                                    bitmap = currentFrame.asImageBitmap(),
+                                    contentDescription = "Screen thumbnail",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }
@@ -437,7 +442,9 @@ fun FloatingPanelContent(
             }
 
             // Continuous Voice Conversation Button
-            val isCurrentlyListening = assistantState == AssistantState.LISTENING || voiceState == VoiceInputState.LISTENING
+            val isCurrentlyListening = (assistantState == AssistantState.LISTENING ||
+                    voiceState == VoiceInputState.LISTENING ||
+                    voiceState == VoiceInputState.SPEECH_DETECTED) && !isMicMuted
             Button(
                 onClick = {
                     if (isCurrentlyListening) {
@@ -464,6 +471,7 @@ fun FloatingPanelContent(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = when {
+                        isMicMuted -> "माइक म्यूट है (सक्रिय करने के लिए टैप करें)"
                         isCurrentlyListening -> "माइक सुन रहा है... (रोकने के लिए टैप करें)"
                         assistantState == AssistantState.THINKING -> "विचार कर रहे हैं..."
                         assistantState == AssistantState.SPEAKING -> "उत्तर बोल रहे हैं... (रोकने के लिए टैप करें)"
