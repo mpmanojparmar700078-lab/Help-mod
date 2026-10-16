@@ -18,6 +18,7 @@ val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "li
 data class UserSettings(
     val customApiKey: String = "",
     val preferredLanguage: String = "hi-IN", // Hindi
+    val voicePersona: String = "natural_female", // "natural_female" or "natural_male"
     val speechRate: Float = 1.0f,
     val speechPitch: Float = 1.0f,
     val autoSpeakResponses: Boolean = true,
@@ -34,6 +35,7 @@ class SettingsRepository(private val context: Context) {
     private object PreferencesKeys {
         val CUSTOM_API_KEY = stringPreferencesKey("custom_api_key")
         val PREFERRED_LANGUAGE = stringPreferencesKey("preferred_language")
+        val VOICE_PERSONA = stringPreferencesKey("voice_persona")
         val SPEECH_RATE = floatPreferencesKey("speech_rate")
         val SPEECH_PITCH = floatPreferencesKey("speech_pitch")
         val AUTO_SPEAK = booleanPreferencesKey("auto_speak_responses")
@@ -47,6 +49,7 @@ class SettingsRepository(private val context: Context) {
         UserSettings(
             customApiKey = preferences[PreferencesKeys.CUSTOM_API_KEY] ?: "",
             preferredLanguage = preferences[PreferencesKeys.PREFERRED_LANGUAGE] ?: "hi-IN",
+            voicePersona = preferences[PreferencesKeys.VOICE_PERSONA] ?: "natural_female",
             speechRate = preferences[PreferencesKeys.SPEECH_RATE] ?: 1.0f,
             speechPitch = preferences[PreferencesKeys.SPEECH_PITCH] ?: 1.0f,
             autoSpeakResponses = preferences[PreferencesKeys.AUTO_SPEAK] ?: true,
@@ -63,6 +66,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun updatePreferredLanguage(lang: String) {
         context.dataStore.edit { it[PreferencesKeys.PREFERRED_LANGUAGE] = lang }
+    }
+
+    suspend fun updateVoicePersona(persona: String) {
+        context.dataStore.edit { it[PreferencesKeys.VOICE_PERSONA] = persona }
     }
 
     suspend fun updateSpeechRate(rate: Float) {

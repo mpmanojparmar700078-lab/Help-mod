@@ -8,6 +8,10 @@ import com.example.data.repository.ChatRepository
 import com.example.screen.ScreenCaptureManager
 import com.example.voice.AudioInputManager
 import com.example.voice.AudioOutputManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.util.Locale
 
 class LiveScreenApp : Application() {
     lateinit var chatDatabase: ChatDatabase
@@ -42,6 +46,17 @@ class LiveScreenApp : Application() {
         audioOutputManager = AudioOutputManager(this)
         audioInputManager = AudioInputManager(this)
         geminiClient = GeminiLiveClient()
+
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+            settingsRepository.settingsFlow.collect { settings ->
+                audioOutputManager.updateSettings(
+                    language = java.util.Locale.forLanguageTag(settings.preferredLanguage),
+                    rate = settings.speechRate,
+                    pitch = settings.speechPitch,
+                    persona = settings.voicePersona
+                )
+            }
+        }
     }
 
     companion object {

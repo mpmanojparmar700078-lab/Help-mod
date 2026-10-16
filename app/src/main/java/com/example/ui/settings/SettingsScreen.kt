@@ -243,9 +243,46 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
+                    // Voice Persona Selection
+                    Text(
+                        text = "आवाज़ का चयन (Voice Persona):",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = settings.voicePersona == "natural_female",
+                            onClick = {
+                                scope.launch {
+                                    app.settingsRepository.updateVoicePersona("natural_female")
+                                    app.audioOutputManager.setVoicePersona("natural_female")
+                                }
+                            },
+                            label = { Text("प्राकृतिक महिला") },
+                            modifier = Modifier.testTag("voice_female_chip")
+                        )
+                        FilterChip(
+                            selected = settings.voicePersona == "natural_male",
+                            onClick = {
+                                scope.launch {
+                                    app.settingsRepository.updateVoicePersona("natural_male")
+                                    app.audioOutputManager.setVoicePersona("natural_male")
+                                }
+                            },
+                            label = { Text("प्राकृतिक पुरुष") },
+                            modifier = Modifier.testTag("voice_male_chip")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
                     // Speech Rate Slider
                     Text(
-                        text = "बोलने की गति: ${(speechRateSlider * 10).toInt() / 10.0}x",
+                        text = "बोलने की गति (Speed): ${(speechRateSlider * 10).toInt() / 10.0}x",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium
                     )
@@ -258,15 +295,52 @@ fun SettingsScreen(
                                 app.audioOutputManager.setSpeechRate(speechRateSlider)
                             }
                         },
-                        valueRange = 0.6f..1.6f,
-                        steps = 5,
+                        valueRange = 0.7f..1.4f,
+                        steps = 6,
                         modifier = Modifier.testTag("speech_rate_slider")
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Speech Pitch Slider
+                    Text(
+                        text = "आवाज़ का सुर (Pitch): ${(speechPitchSlider * 10).toInt() / 10.0}x",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Slider(
+                        value = speechPitchSlider,
+                        onValueChange = { speechPitchSlider = it },
+                        onValueChangeFinished = {
+                            scope.launch {
+                                app.settingsRepository.updateSpeechPitch(speechPitchSlider)
+                                app.audioOutputManager.setSpeechPitch(speechPitchSlider)
+                            }
+                        },
+                        valueRange = 0.8f..1.2f,
+                        steps = 4,
+                        modifier = Modifier.testTag("speech_pitch_slider")
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Active Voice Status Display
+                    val ttsEngineStatus by app.audioOutputManager.ttsStatus.collectAsState()
+                    Text(
+                        text = ttsEngineStatus,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     // Test Voice Button
                     Button(
                         onClick = {
-                            app.audioOutputManager.speak("नमस्ते, मैं लाइव स्क्रीन एआई गाइड हूँ। मैं आपकी स्क्रीन देखकर मदद कर सकता हूँ।")
+                            app.audioOutputManager.speak(
+                                "नमस्ते! मैं आपका लाइव स्क्रीन एआई गाइड हूँ। आपकी स्क्रीन देखकर, मैं आपको हर कदम पर स्पष्ट और स्वाभाविक मदद करूँगा।"
+                            )
                         },
                         modifier = Modifier
                             .align(Alignment.End)
