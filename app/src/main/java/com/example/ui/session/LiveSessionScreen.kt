@@ -198,8 +198,7 @@ fun LiveSessionScreen(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
-            ScreenGuideService.startService(context)
-            app.screenCaptureManager.startCapture(result.resultCode, result.data!!)
+            ScreenGuideService.startCapture(context, result.resultCode, result.data!!)
         }
     }
 

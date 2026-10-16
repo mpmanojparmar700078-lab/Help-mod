@@ -72,7 +72,14 @@ class ScreenCaptureManager(private val context: Context) {
         Log.d(TAG, "Starting capture with size: ${screenWidth}x${screenHeight}, density: $screenDensity")
 
         try {
-            mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
+            mediaProjection = try {
+                mediaProjectionManager.getMediaProjection(resultCode, data)
+            } catch (se: SecurityException) {
+                Log.w(TAG, "SecurityException on initial getMediaProjection attempt (${se.message}). Waiting for foreground service transition and retrying...")
+                Thread.sleep(200)
+                mediaProjectionManager.getMediaProjection(resultCode, data)
+            }
+
             if (mediaProjection == null) {
                 Log.e(TAG, "mediaProjection is null")
                 _isCapturing.value = false

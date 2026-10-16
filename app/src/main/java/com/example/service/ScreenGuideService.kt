@@ -21,7 +21,23 @@ class ScreenGuideService : Service {
         const val CHANNEL_ID = "live_screen_guide_channel"
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.example.service.ACTION_START"
+        const val ACTION_START_CAPTURE = "com.example.service.ACTION_START_CAPTURE"
         const val ACTION_STOP = "com.example.service.ACTION_STOP"
+        const val EXTRA_RESULT_CODE = "extra_result_code"
+        const val EXTRA_DATA_INTENT = "extra_data_intent"
+
+        fun startCapture(context: Context, resultCode: Int, data: Intent) {
+            val intent = Intent(context, ScreenGuideService::class.java).apply {
+                action = ACTION_START_CAPTURE
+                putExtra(EXTRA_RESULT_CODE, resultCode)
+                putExtra(EXTRA_DATA_INTENT, data)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
 
         fun startService(context: Context) {
             val intent = Intent(context, ScreenGuideService::class.java).apply {
@@ -61,7 +77,7 @@ class ScreenGuideService : Service {
                 stopSelf()
                 return START_NOT_STICKY
             }
-            ACTION_START -> {
+            ACTION_START, ACTION_START_CAPTURE -> {
                 val notification = buildNotification()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
@@ -71,6 +87,20 @@ class ScreenGuideService : Service {
                     )
                 } else {
                     startForeground(NOTIFICATION_ID, notification)
+                }
+
+                if (intent.action == ACTION_START_CAPTURE) {
+                    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, android.app.Activity.RESULT_CANCELED)
+                    val dataIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(EXTRA_DATA_INTENT, Intent::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(EXTRA_DATA_INTENT)
+                    }
+
+                    if (resultCode == android.app.Activity.RESULT_OK && dataIntent != null) {
+                        com.example.LiveScreenApp.instance.screenCaptureManager.startCapture(resultCode, dataIntent)
+                    }
                 }
             }
         }

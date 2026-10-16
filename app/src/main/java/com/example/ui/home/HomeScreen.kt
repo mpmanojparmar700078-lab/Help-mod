@@ -124,9 +124,8 @@ fun HomeScreen(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
-            // Start Foreground Service first (required on Android 14+)
-            ScreenGuideService.startService(context)
-            app.screenCaptureManager.startCapture(result.resultCode, result.data!!)
+            // Start Foreground Service with type mediaProjection first to satisfy Android 14+ requirements
+            ScreenGuideService.startCapture(context, result.resultCode, result.data!!)
             val newSessionId = UUID.randomUUID().toString()
             onNavigateToSession(newSessionId)
         }
