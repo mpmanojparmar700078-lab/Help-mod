@@ -21,8 +21,8 @@ android {
     val propVersionName = project.findProperty("versionName")?.toString()
     val envVersionName = providers.environmentVariable("VERSION_NAME").orNull
 
-    versionCode = propVersionCode ?: envVersionCode ?: 3
-    versionName = propVersionName ?: envVersionName ?: "1.0.2"
+    versionCode = propVersionCode ?: envVersionCode ?: 4
+    versionName = propVersionName ?: envVersionName ?: "1.0.3"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
